@@ -1,3 +1,6 @@
+from typing import Any
+
+
 def string_to_unique_int(text: str, max_int: int = 2**31 - 1) -> int:
     """
     Convert any string to a unique positive integer.
@@ -9,3 +12,12 @@ def string_to_unique_int(text: str, max_int: int = 2**31 - 1) -> int:
     # Create a positive integer hash
     hash_value = hash(text) & 0x7FFFFFFF  # Mask to ensure positive value
     return hash_value % max_int  # Ensure it's within range
+
+
+def deduplicate_lists(nested_list: list[list[Any]]) -> list[list[Any]]:
+    # Convert inner lists to tuples for hashing
+    tuple_list = [tuple(inner_list) for inner_list in nested_list]
+    # Create a set to remove duplicates
+    unique_tuples = set(tuple_list)
+    # Convert back to lists
+    return [list(t) for t in unique_tuples]

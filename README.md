@@ -4,7 +4,7 @@ A set of Python scripts to convert GTFS (General Transit Feed Specification) tra
 
 ## Overview
 
-This project provides tools to transform public transit data from the GTFS format into OpenStreetMap relations. These relations can then be imported into OSM to enhance public transportation mapping.
+This project provides tools to transform public transit data from the GTFS format into OpenStreetMap PTv2 relations. These relations can then be imported into OSM to enhance public transportation mapping. Currently, only bus routes are supported.
 
 ## Features
 
@@ -15,7 +15,7 @@ This project provides tools to transform public transit data from the GTFS forma
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - Required Python packages (see `requirements.txt`)
 - Internet connection (for API access)
 
@@ -40,7 +40,7 @@ This project provides tools to transform public transit data from the GTFS forma
 Basic usage example:
 
 ```bash
-python -m gtfstoosm.convert --input path/to/gtfs/feed --output output.osm
+python -m gtfstoosm.convert --input path/to/gtfs/feed.zip --output output.osm
 ```
 
 For more detailed instructions and options, see the [Documentation](docs/usage.md).
@@ -55,7 +55,6 @@ gtfstoosm/
 │   ├── gtfs.py         # GTFS data handling
 │   ├── osm.py          # OSM output generation
 │   └── utils.py        # Utility functions
-├── tests/              # Test suite
 ├── docs/               # Documentation
 ├── requirements.txt    # Python dependencies
 └── LICENSE             # MIT License

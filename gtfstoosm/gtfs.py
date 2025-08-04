@@ -76,15 +76,8 @@ class GTFSFeed(BaseModel):
                     )
                 except Exception as e:
                     raise ValueError(f"Error loading {file}: {str(e)}")
-            # if self.feed_dir and file.endswith(".txt"):
-            #     file_path = os.path.join(self.feed_dir, file)
-            #     table_name = file[:-4]  # Remove the .txt extension
-            #     try:
-            #         self.tables[table_name] = self._read_csv_file(file_path)
-            #     except Exception as e:
-            #         print(f"Error reading {file}: {e}")
 
-    def _read_csv_file(self, file_path):
+    def _read_csv_file(self, file_path: str) -> pl.DataFrame:
         """
         Read a CSV file using Polars.
 
@@ -114,7 +107,7 @@ class GTFSFeed(BaseModel):
             print(f"Error reading {file_path}: {e}")
             return pl.DataFrame()
 
-    def _clean_value(self, value):
+    def _clean_value(self, value: str) -> str:
         """
         Clean a value from a GTFS feed.
 
@@ -142,7 +135,7 @@ class GTFSFeed(BaseModel):
 
         return value
 
-    def get_table(self, table_name):
+    def get_table(self, table_name) -> pl.DataFrame:
         """
         Get a table from the GTFS feed.
 

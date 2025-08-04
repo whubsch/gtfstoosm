@@ -10,9 +10,10 @@ from typing import Any
 import requests
 import atlus
 import polars as pl
+import random
 
-from gtfstoosm.osm import OSMRelation
-from gtfstoosm.utils import string_to_unique_int
+from gtfstoosm.osm import OSMNode, OSMRelation
+from gtfstoosm.utils import string_to_unique_int, deduplicate_lists
 from gtfstoosm.gtfs import GTFSFeed
 
 logger = logging.getLogger(__name__)
@@ -41,8 +42,8 @@ class OSMRelationBuilder:
         self.include_routes = include_routes
         self.route_types = route_types
         self.agency_id = agency_id
-        self.relations = []
-        self.nodes = []
+        self.relations: list[OSMRelation] = []
+        self.nodes: list[OSMNode] = []
 
     def __str__(self) -> str:
         return f"OSMRelationBuilder(include_stops={self.include_stops}, include_routes={self.include_routes}, route_types={self.route_types}, agency_id={self.agency_id})"
@@ -63,8 +64,35 @@ class OSMRelationBuilder:
             self._process_routes(gtfs_data)
 
         logger.info(
-            f"Built {len(self.relations)} relations and {len(self.nodes)} nodes"
+            f"Built {len(self.relations)} route relations and {len(self.nodes)} nodes"
         )
+
+    def build_route_masters(self, gtfs_data: dict[str, pl.DataFrame]) -> None:
+        """
+        Create route_master relations for routes with the same ref.
+        """
+        logger.info("Creating route_master relations")
+
+        made_routes = set(variant.tags["ref"] for variant in self.relations)
+        unique_routes = gtfs_data["routes"].filter(
+            pl.col("route_id").is_in(made_routes)
+        )
+
+        for unique_route in unique_routes.iter_rows():
+            master = OSMRelation(
+                id=-1 * random.randint(1, 10**6),
+                tags={
+                    "type": "route_master",
+                    "route_master": "bus",
+                    "ref": unique_route[0],
+                    "name": atlus.abbrs(unique_route[3]),
+                    "colour": "#" + unique_route[7],
+                },
+            )
+            for route in self.relations:
+                if route.tags.get("ref") == unique_route:
+                    master.add_member(osm_type="relation", ref=route.id)
+            self.relations.append(master)
 
     def _process_stops(self, stops: pl.DataFrame) -> None:
         """
@@ -96,60 +124,61 @@ class OSMRelationBuilder:
         if self.route_types:
             routes = routes.filter(pl.col("route_type").is_in(self.route_types))
 
-        print(routes)
         # Placeholder for route processing logic
         for route in routes.iter_rows():
             if route[0].startswith("F8"):
                 pass
             else:
                 continue
-            # Get representative trip for this route
-            # route_trips = [t for t in trips if t["route_id"] == route["route_id"]]
+
+            logger.info(f"Processing route {route[0]}")
+
+            # Get trip variants for this route
             route_trips = trips.filter(pl.col("route_id") == route[0])
             if route_trips.is_empty():
                 continue
 
-            # Use the first trip as representative
-            trip = route_trips[0]
+            route_trip_stops = []
+            for route_trip in route_trips.iter_rows():
+                # Get stop sequence for this trip variant
+                trip_stops = stop_times.filter(pl.col("trip_id") == route_trip[2])
+                trip_stops.sort("stop_sequence")
 
-            # Get stop sequence for this trip
-            # trip_stops = [st for st in stop_times if st["trip_id"] == trip["trip_id"]]
-            trip_stops = stop_times.filter(pl.col("trip_id") == trip[0])
-            trip_stops.sort("stop_sequence")
+                # Get the stop IDs from the stop_times
+                stop_ids = trip_stops["stop_id"].to_list()
+                route_trip_stops.append(stop_ids)
 
-            # Get the stop IDs from the stop_times
-            # stop_ids: Sequence[Any] = [st.get("stop_id") for st in trip_stops]
-            stop_ids = trip_stops["stop_id"].to_list()
+            # Deduplicate stop sets
+            route_trip_stops = deduplicate_lists(route_trip_stops)
+            for route_trip_stop in route_trip_stops:
+                # Get the stop locations (with lat and long)
+                stop_locations = self._get_stop_locations(route_trip_stop, stops)
 
-            # Get the stop locations (with lat and long)
-            stop_locations = self._get_stop_locations(stop_ids, stops)
+                # Get the OSM ways that make up the route
+                osm_way_ids = self._get_route_ways(stop_locations)
+                logger.info(
+                    f"Found {len(osm_way_ids)} total ways for route {route[0]} variant"
+                )
 
-            # Get the OSM ways that make up the route
-            osm_way_ids = self._get_route_ways(stop_locations)
-            logger.info(f"Found {len(osm_way_ids)} total ways for route {route[0]}")
-
-            # Create OSM relation
-            relation = OSMRelation(
-                **{
-                    "id": f"-{string_to_unique_int(route[0])}",
-                    "type": "route",
-                    "tags": {
+                # Create OSM relation
+                relation = OSMRelation(
+                    id=-1 * random.randint(1, string_to_unique_int(route[0])),
+                    tags={
                         "type": "route",
                         "public_transport:version": "2",
                         "route": self._get_osm_route_type(route[5]),
                         "ref": route[2],
                         "name": atlus.abbrs(route[3]),
-                        # "network": self._get_network_name(route, gtfs_data["agency"]),
+                        "colour": "#" + route[7],
                     },
-                    "members": [],
-                }
-            )
+                    members=[],
+                )
 
-            # Add ways as members
-            for way_id in osm_way_ids:
-                relation.add_member(**{"osm_type": "way", "ref": way_id, "role": ""})
+                # Add ways as members
+                for way_id in osm_way_ids:
+                    relation.add_member(osm_type="way", ref=way_id)
 
-            self.relations.append(relation)
+                self.relations.append(relation)
 
     def _get_stop_locations(
         self, stop_ids: list[str], stops: pl.DataFrame
@@ -188,7 +217,11 @@ class OSMRelationBuilder:
         return stop_locations
 
     def _get_route_ways(
-        self, stop_locations: pl.DataFrame, costing: str = "bus"
+        self,
+        stop_locations: pl.DataFrame,
+        costing: str = "bus",
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
     ) -> list[int]:
         """
         Get OSM way IDs for a route between stops using Valhalla API.
@@ -196,6 +229,8 @@ class OSMRelationBuilder:
         Args:
             stop_locations: List of dictionaries containing stop information with lat and lon
             costing: Valhalla costing model to use (bus, auto, pedestrian, etc.)
+            max_retries: Maximum number of retry attempts if request fails
+            retry_delay: Delay in seconds between retry attempts
 
         Returns:
             List of unique OSM way IDs that make up the route
@@ -204,31 +239,54 @@ class OSMRelationBuilder:
 
         route_ways = []
 
-        try:
-            # Get the ways between these stops
-            valhalla_url = "https://valhalla1.openstreetmap.de/trace_attributes"
-            lats = stop_locations["lat"].to_list()
-            lons = stop_locations["lon"].to_list()
+        # Get the input data for the request
+        valhalla_url = "https://valhalla1.openstreetmap.de/trace_attributes"
+        lats = stop_locations["lat"].to_list()
+        lons = stop_locations["lon"].to_list()
 
-            request_json = {
-                "shape": [{"lat": lat, "lon": lon} for lat, lon in zip(lats, lons)],
-                "costing": costing,
-                "format": "osrm",
-                "shape_match": "map_snap",
-                "filters": {"attributes": ["edge.way_id", "edge.names"]},
-            }
+        request_json = {
+            "shape": [{"lat": lat, "lon": lon} for lat, lon in zip(lats, lons)],
+            "costing": costing,
+            "format": "osrm",
+            "shape_match": "map_snap",
+            "filters": {"attributes": ["edge.way_id", "edge.names"]},
+        }
 
-            response = requests.post(valhalla_url, json=request_json).json()
+        # Try the request with retries
+        retry_count = 0
+        while retry_count <= max_retries:
+            try:
+                response = requests.post(valhalla_url, json=request_json).json()
 
-            # Extract the way IDs
-            for edge in response.get("edges", []):
-                if "way_id" in edge:
-                    way_id = edge["way_id"]
-                    if way_id not in route_ways:
-                        route_ways.append(way_id)
+                # Check if the response contains the expected data
+                if "edges" in response:
+                    # Extract the way IDs
+                    for edge in response.get("edges", []):
+                        if "way_id" in edge:
+                            way_id = edge["way_id"]
+                            if way_id not in route_ways:
+                                route_ways.append(way_id)
+                    return route_ways
+                else:
+                    logger.warning(
+                        f"Invalid response from Valhalla (attempt {retry_count + 1}/{max_retries + 1})"
+                    )
 
-        except Exception as e:
-            logger.warning(f"Error getting ways between stops: {str(e)}")
+            except Exception as e:
+                logger.warning(
+                    f"Error getting ways between stops (attempt {retry_count + 1}/{max_retries + 1}): {str(e)}"
+                )
+
+            # If we get here, the request failed or the response was invalid
+            if retry_count < max_retries:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                import time
+
+                time.sleep(retry_delay)
+                retry_count += 1
+            else:
+                logger.error(f"Failed to get ways after {max_retries + 1} attempts")
+                break
 
         return route_ways
 
@@ -295,8 +353,7 @@ class OSMRelationBuilder:
         """
         logger.info(f"Writing OSM data to {output_path}")
 
-        # Placeholder for file writing logic
-        # In a real implementation, this would create a proper OSM XML file
+        # Writing logic
         try:
             with open(output_path, "w") as f:
                 f.write("<?xml version='1.0' encoding='UTF-8'?>\n")
@@ -361,6 +418,7 @@ def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options) -> bool:
             agency_id=options.get("agency_id"),
         )
         builder.build_relations(loader.tables)
+        builder.build_route_masters(loader.tables)
 
         # Write to file
         builder.write_to_file(osm_path)
