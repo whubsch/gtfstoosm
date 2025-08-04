@@ -4,6 +4,8 @@ import xml.dom.minidom
 import datetime
 import logging
 
+import atlus
+
 logger = logging.getLogger(__name__)
 
 
@@ -190,7 +192,7 @@ class OSMBuilder:
         return osm_id
 
     def create_route_relation(
-        self, route_id: str, tags: dict[str, str], stop_ids: list[int] = None
+        self, route_id: str, tags: dict[str, str], stop_ids: list[int]
     ) -> int:
         """
         Create a relation for a GTFS route.
@@ -313,9 +315,9 @@ class OSMBuilder:
             tags = {
                 "type": "route",
                 "route": osm_route_type,
+                "public_transport:version": "2",
                 "ref": route_short_name,
-                "name": route_long_name or route_short_name,
-                "gtfs:route_id": str(route_id),
+                "name": atlus.abbrs(route_long_name) or route_short_name,
             }
 
             if agency_name:
@@ -338,7 +340,7 @@ class OSMBuilder:
                 if route_short_name not in route_relations_by_ref:
                     route_relations_by_ref[route_short_name] = {
                         "type": osm_route_type,
-                        "name": route_long_name or route_short_name,
+                        "name": atlus.abbrs(route_long_name) or route_short_name,
                         "relations": [],
                     }
                 route_relations_by_ref[route_short_name]["relations"].append(
