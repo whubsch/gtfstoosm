@@ -5,37 +5,33 @@ This module provides functionality for parsing and processing GTFS data.
 It handles the reading and validation of GTFS feeds.
 """
 
-import os
 import polars as pl
 import logging
 import re
-import tempfile
+from io import BytesIO
 import zipfile
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 
-class GTFSFeed:
+class GTFSFeed(BaseModel):
     """Class for storing and querying a GTFS feed."""
 
-    def __init__(self, feed_dir=None):
-        """
-        Initialize a GTFS feed.
-
-        Args:
-            feed_dir: Path to the directory containing the GTFS feed files.
-        """
-        # Required GTFS files
-        self.required_files = [
+    feed_dir: str
+    tables: dict[str, pl.DataFrame] = Field(default_factory=dict)
+    name: str | None = None
+    required_files: list[str] = Field(
+        default_factory=lambda: [
             "agency.txt",
             "stops.txt",
             "routes.txt",
             "trips.txt",
             "stop_times.txt",
         ]
-
-        # Optional GTFS files
-        self.optional_files = [
+    )
+    optional_files: list[str] = Field(
+        default_factory=lambda: [
             "calendar.txt",
             "calendar_dates.txt",
             "fare_attributes.txt",
@@ -49,112 +45,44 @@ class GTFSFeed:
             "translations.txt",
             "attributions.txt",
         ]
+    )
 
-        # Dictionary to store the GTFS tables as Polars DataFrames
-        self.tables = {}
+    class Config:
+        arbitrary_types_allowed = True  # Allow Polars DataFrames
+        validate_assignment = True
 
-        # Set the feed directory
-        self.feed_dir = feed_dir
-
-        # Load the feed if a feed directory is provided
-        if feed_dir:
-            self.load(feed_dir)
-
-        # Set the name of the feed, use the agency name if available
-        self.name = None
-        if "agency" in self.tables:
-            self.name = (
-                self.tables["agency"]
-                .filter(pl.col("agency_id") == "0")
-                .select("agency_name")
-                .item()
-            )
-
-    def validate(self):
-        """
-        Validate the GTFS feed.
-
-        Checks that all required files are present and that they contain the required fields.
-
-        Returns:
-            list: A list of validation errors.
-        """
-        errors = []
-
-        # Check that the feed directory exists
-        if not self.feed_dir:
-            errors.append("Feed directory not specified.")
-            return errors
-
-        if not os.path.exists(self.feed_dir):
-            errors.append(f"Feed directory {self.feed_dir} does not exist.")
-            return errors
-
-        # Check that all required files are present
-        for file in self.required_files:
-            file_path = os.path.join(self.feed_dir, file)
-            if not os.path.exists(file_path):
-                errors.append(f"Required file {file} not found.")
-
-        # Check that required fields are present in required files
-        required_fields = {
-            "agency.txt": ["agency_id", "agency_name", "agency_url", "agency_timezone"],
-            "stops.txt": ["stop_id", "stop_name", "stop_lat", "stop_lon"],
-            "routes.txt": [
-                "route_id",
-                "route_short_name",
-                "route_long_name",
-                "route_type",
-            ],
-            "trips.txt": ["route_id", "service_id", "trip_id"],
-            "stop_times.txt": [
-                "trip_id",
-                "arrival_time",
-                "departure_time",
-                "stop_id",
-                "stop_sequence",
-            ],
-        }
-
-        for file, fields in required_fields.items():
-            file_path = os.path.join(self.feed_dir, file)
-            if os.path.exists(file_path):
-                try:
-                    # Read the first row of the file using Polars to get the header
-                    df = pl.read_csv(file_path, n_rows=1)
-                    header = df.columns
-
-                    # Check that all required fields are present
-                    for field in fields:
-                        if field not in header:
-                            errors.append(
-                                f"Required field {field} not found in {file}."
-                            )
-                except Exception as e:
-                    errors.append(f"Error reading {file}: {e}")
-
-        return errors
-
-    def load(self, feed_dir=None):
+    def load(self) -> None:
         """
         Load a GTFS feed.
-
-        Args:
-            feed_dir: Path to the directory containing the GTFS feed files.
         """
-        if feed_dir:
-            self.feed_dir = feed_dir
 
         # Read all files in the feed directory
-        files = os.listdir(self.feed_dir)
-        for file in files:
-            if self.feed_dir and file.endswith(".txt"):
-                file_path = os.path.join(self.feed_dir, file)
+        with zipfile.ZipFile(self.feed_dir, "r") as zip_ref:
+            for file in zip_ref.namelist():
                 table_name = file[:-4]  # Remove the .txt extension
                 try:
-                    self.tables[table_name] = self._read_csv_file(file_path)
+                    with zip_ref.open(file) as file_obj:
+                        # Read the CSV data into a polars DataFrame
+                        df = pl.read_csv(
+                            BytesIO(file_obj.read()), infer_schema_length=None
+                        )
+
+                        logger.info(f"Loaded {df.height:,} records from {file}")
+                        self.tables[table_name] = df
+
+                except zipfile.BadZipFile:
+                    raise ValueError(
+                        f"The file at {self.feed_dir} is not a valid zip file"
+                    )
                 except Exception as e:
-                    print(f"Error reading {file}: {e}")
+                    raise ValueError(f"Error loading {file}: {str(e)}")
+            # if self.feed_dir and file.endswith(".txt"):
+            #     file_path = os.path.join(self.feed_dir, file)
+            #     table_name = file[:-4]  # Remove the .txt extension
+            #     try:
+            #         self.tables[table_name] = self._read_csv_file(file_path)
+            #     except Exception as e:
+            #         print(f"Error reading {file}: {e}")
 
     def _read_csv_file(self, file_path):
         """
@@ -371,59 +299,3 @@ class GTFSToOSMMapper:
         tags = {k: v for k, v in tags.items() if v}
 
         return tags
-
-
-class GTFSReader:
-    """Class for reading GTFS feeds."""
-
-    @staticmethod
-    def read_feed(feed_path):
-        """
-        Read a GTFS feed.
-
-        Args:
-            feed_path: Path to the GTFS feed file or directory.
-
-        Returns:
-            GTFSFeed: A GTFSFeed object.
-        """
-        # If the feed path is a zip file, extract it to a temporary directory
-        if feed_path.endswith(".zip"):
-            temp_dir = tempfile.mkdtemp()
-            with zipfile.ZipFile(feed_path, "r") as zip_ref:
-                zip_ref.extractall(temp_dir)
-            feed_dir = temp_dir
-        else:
-            feed_dir = feed_path
-
-        # Create a GTFSFeed object
-        feed = GTFSFeed(feed_dir)
-
-        return feed
-
-    @staticmethod
-    def get_agency_name(feed):
-        """
-        Get the name of the agency in a GTFS feed.
-
-        Args:
-            feed: The GTFSFeed object.
-
-        Returns:
-            str: The name of the agency.
-        """
-        agency = feed.get_table("agency")
-        if agency.is_empty():
-            return None
-
-        # Try to get the name of the agency with ID 0
-        if "agency_id" in agency.columns:
-            agency_0 = agency.filter(pl.col("agency_id") == "0")
-            if not agency_0.is_empty() and "agency_name" in agency_0.columns:
-                return agency_0.select("agency_name").item()
-
-        # If there is no agency with ID 0, get the name of the first agency
-        if "agency_name" in agency.columns:
-            return agency.select("agency_name").item(0)
-
-        return None

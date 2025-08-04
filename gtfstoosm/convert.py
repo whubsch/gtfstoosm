@@ -5,108 +5,17 @@ This module contains the main functionality for reading GTFS data and
 converting it to OSM relations that can be imported into OpenStreetMap.
 """
 
-import os
 import logging
-import zipfile
-from typing import Any, Sequence
-import polars as pl
-from io import BytesIO
+from typing import Any
 import requests
 import atlus
+import polars as pl
 
 from gtfstoosm.osm import OSMRelation
 from gtfstoosm.utils import string_to_unique_int
+from gtfstoosm.gtfs import GTFSFeed
 
 logger = logging.getLogger(__name__)
-
-
-class GTFSFeedLoader:
-    """Class for loading and parsing GTFS feed data."""
-
-    def __init__(self, feed_path: str):
-        """
-        Initialize the GTFS feed loader.
-
-        Args:
-            feed_path: Path to the GTFS feed zip file
-        """
-        self.feed_path = feed_path
-        if not os.path.exists(feed_path):
-            raise FileNotFoundError(f"GTFS feed not found at {feed_path}")
-
-    def load(self) -> dict[str, list[dict[str, Any]]]:
-        """
-        Load the GTFS feed data.
-
-        Returns:
-            A dictionary containing the parsed GTFS data with keys for
-            'routes', 'stops', 'trips', 'stop_times', etc.
-
-        Raises:
-            ValueError: If the GTFS feed is invalid
-        """
-        logger.info(f"Loading GTFS feed from {self.feed_path}")
-
-        try:
-            data = {
-                "routes": self._load_table("routes.txt"),
-                "stops": self._load_table("stops.txt"),
-                "trips": self._load_table("trips.txt"),
-                "stop_times": self._load_table("stop_times.txt"),
-                "agency": self._load_table("agency.txt", required=False),
-            }
-
-            logger.info(
-                f"Loaded GTFS feed with {len(data['routes'])} routes and {len(data['stops'])} stops"
-            )
-            return data
-
-        except Exception as e:
-            logger.error(f"Error loading GTFS feed: {str(e)}")
-            raise ValueError(f"Invalid GTFS feed: {str(e)}")
-
-    def _load_table(self, filename: str, required: bool = True) -> list[dict[str, Any]]:
-        """
-        Load a specific table from the GTFS feed.
-
-        Args:
-            filename: The name of the file to load (e.g., 'routes.txt')
-            required: Whether this file is required. If True and the file
-                        is missing, an exception will be raised.
-
-        Returns:
-            A list of dictionaries, where each dictionary represents a row
-            in the table with column names as keys.
-
-        Raises:
-            ValueError: If a required file is missing or invalid
-        """
-        try:
-            with zipfile.ZipFile(self.feed_path, "r") as zip_ref:
-                if filename not in zip_ref.namelist():
-                    if required:
-                        raise ValueError(
-                            f"Required file {filename} not found in GTFS feed"
-                        )
-                    else:
-                        logger.warning(
-                            f"Optional file {filename} not found in GTFS feed"
-                        )
-                        return []
-
-                with zip_ref.open(filename) as file:
-                    # Read the CSV data into a polars DataFrame
-                    df = pl.read_csv(BytesIO(file.read()), infer_schema_length=None)
-
-                    # Convert to list of dictionaries
-                    records = df.to_dicts()
-                    logger.info(f"Loaded {len(records):,} records from {filename}")
-                    return records
-
-        except zipfile.BadZipFile:
-            raise ValueError(f"The file at {self.feed_path} is not a valid zip file")
-        except Exception as e:
-            raise ValueError(f"Error loading {filename}: {str(e)}")
 
 
 class OSMRelationBuilder:
@@ -138,12 +47,12 @@ class OSMRelationBuilder:
     def __str__(self) -> str:
         return f"OSMRelationBuilder(include_stops={self.include_stops}, include_routes={self.include_routes}, route_types={self.route_types}, agency_id={self.agency_id})"
 
-    def build_relations(self, gtfs_data: dict[str, list[dict[str, Any]]]) -> None:
+    def build_relations(self, gtfs_data: dict[str, pl.DataFrame]) -> None:
         """
         Build OSM relations from GTFS data.
 
         Args:
-            gtfs_data: The GTFS data as returned by GTFSFeedLoader.load()
+            gtfs_data: The GTFS data as returned by GTFSFeed.load()
         """
         logger.info("Building OSM relations from GTFS data")
 
@@ -157,7 +66,7 @@ class OSMRelationBuilder:
             f"Built {len(self.relations)} relations and {len(self.nodes)} nodes"
         )
 
-    def _process_stops(self, stops: list[dict[str, Any]]) -> None:
+    def _process_stops(self, stops: pl.DataFrame) -> None:
         """
         Process GTFS stops and convert them to OSM nodes.
 
@@ -166,22 +75,10 @@ class OSMRelationBuilder:
         """
         logger.info(f"Processing {len(stops)} stops")
 
-        for stop in stops:
-            # Convert GTFS stop to OSM node
-            node = {
-                "id": stop["stop_id"],
-                "lat": stop["stop_lat"],
-                "lon": stop["stop_lon"],
-                "tags": {
-                    "name": stop["stop_name"],
-                    "public_transport": "platform",
-                    "highway": "bus_stop",  # This would be determined by route_type in reality
-                    "gtfs:stop_id": stop["stop_id"],
-                },
-            }
-            self.nodes.append(node)
+        # Placeholder for stop processing logic
+        raise NotImplementedError("Stop processing not implemented yet")
 
-    def _process_routes(self, gtfs_data: dict[str, list[dict[str, Any]]]) -> None:
+    def _process_routes(self, gtfs_data: dict[str, pl.DataFrame]) -> None:
         """
         Process GTFS routes and convert them to OSM relations.
 
@@ -197,54 +94,52 @@ class OSMRelationBuilder:
 
         # Filter routes by type if specified
         if self.route_types:
-            routes = [r for r in routes if r.get("route_type") in self.route_types]
+            routes = routes.filter(pl.col("route_type").is_in(self.route_types))
 
-        # Filter routes by agency if specified
-        if self.agency_id:
-            routes = [r for r in routes if r.get("agency_id") == self.agency_id]
-
+        print(routes)
         # Placeholder for route processing logic
-        for route in routes:
-            if route["route_id"].startswith("F8"):
+        for route in routes.iter_rows():
+            if route[0].startswith("F8"):
                 pass
             else:
                 continue
             # Get representative trip for this route
-            route_trips = [t for t in trips if t["route_id"] == route["route_id"]]
-            if not route_trips:
+            # route_trips = [t for t in trips if t["route_id"] == route["route_id"]]
+            route_trips = trips.filter(pl.col("route_id") == route[0])
+            if route_trips.is_empty():
                 continue
 
             # Use the first trip as representative
             trip = route_trips[0]
 
             # Get stop sequence for this trip
-            trip_stops = [st for st in stop_times if st["trip_id"] == trip["trip_id"]]
-            trip_stops.sort(key=lambda x: x["stop_sequence"])
+            # trip_stops = [st for st in stop_times if st["trip_id"] == trip["trip_id"]]
+            trip_stops = stop_times.filter(pl.col("trip_id") == trip[0])
+            trip_stops.sort("stop_sequence")
 
             # Get the stop IDs from the stop_times
-            stop_ids: Sequence[Any] = [st.get("stop_id") for st in trip_stops]
+            # stop_ids: Sequence[Any] = [st.get("stop_id") for st in trip_stops]
+            stop_ids = trip_stops["stop_id"].to_list()
 
             # Get the stop locations (with lat and long)
             stop_locations = self._get_stop_locations(stop_ids, stops)
 
             # Get the OSM ways that make up the route
             osm_way_ids = self._get_route_ways(stop_locations)
-            logger.info(
-                f"Found {len(osm_way_ids)} total ways for route {route['route_id']}"
-            )
+            logger.info(f"Found {len(osm_way_ids)} total ways for route {route[0]}")
 
             # Create OSM relation
             relation = OSMRelation(
                 **{
-                    "id": f"-{string_to_unique_int(route['route_id'])}",
+                    "id": f"-{string_to_unique_int(route[0])}",
                     "type": "route",
                     "tags": {
                         "type": "route",
                         "public_transport:version": "2",
-                        "route": self._get_osm_route_type(route["route_type"]),
-                        "ref": route.get("route_short_name", ""),
-                        "name": atlus.abbrs(route.get("route_long_name", "")),
-                        "network": self._get_network_name(route, gtfs_data["agency"]),
+                        "route": self._get_osm_route_type(route[5]),
+                        "ref": route[2],
+                        "name": atlus.abbrs(route[3]),
+                        # "network": self._get_network_name(route, gtfs_data["agency"]),
                     },
                     "members": [],
                 }
@@ -257,8 +152,8 @@ class OSMRelationBuilder:
             self.relations.append(relation)
 
     def _get_stop_locations(
-        self, stop_ids: list[str], stops: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+        self, stop_ids: list[str], stops: pl.DataFrame
+    ) -> pl.DataFrame:
         """
         Get location information for a list of stop IDs.
 
@@ -269,25 +164,31 @@ class OSMRelationBuilder:
         Returns:
             List of dictionaries containing stop information with lat and lon
         """
-        stop_locations = []
-        for stop_id in stop_ids:
-            # Find the stop with matching stop_id
-            for stop in stops:
-                if stop["stop_id"] == stop_id:
-                    stop_locations.append(
-                        {
-                            "stop_id": stop_id,
-                            "lat": stop["stop_lat"],
-                            "lon": stop["stop_lon"],
-                            "name": stop["stop_name"],
-                        }
-                    )
-                    break
+        # Create a DataFrame from stop_ids to preserve order
+        stop_ids_df = pl.DataFrame({"stop_id": stop_ids, "order": range(len(stop_ids))})
+
+        # Join with stops data and sort by original order
+        stop_locations = (
+            stop_ids_df.join(
+                stops.select(["stop_id", "stop_lat", "stop_lon", "stop_name"]),
+                on="stop_id",
+                how="inner",
+            )
+            .sort("order")
+            .select(
+                [
+                    "stop_id",
+                    pl.col("stop_lat").alias("lat"),
+                    pl.col("stop_lon").alias("lon"),
+                    pl.col("stop_name").alias("name"),
+                ]
+            )
+        )
 
         return stop_locations
 
     def _get_route_ways(
-        self, stop_locations: list[dict[str, Any]], costing: str = "bus"
+        self, stop_locations: pl.DataFrame, costing: str = "bus"
     ) -> list[int]:
         """
         Get OSM way IDs for a route between stops using Valhalla API.
@@ -299,18 +200,18 @@ class OSMRelationBuilder:
         Returns:
             List of unique OSM way IDs that make up the route
         """
-        logger.info(f"Getting OSM ways for route with {len(stop_locations)} stops")
+        logger.info(f"Getting OSM ways for route with {stop_locations.height} stops")
 
         route_ways = []
 
         try:
             # Get the ways between these stops
             valhalla_url = "https://valhalla1.openstreetmap.de/trace_attributes"
+            lats = stop_locations["lat"].to_list()
+            lons = stop_locations["lon"].to_list()
 
             request_json = {
-                "shape": [
-                    {"lat": stop["lat"], "lon": stop["lon"]} for stop in stop_locations
-                ],
+                "shape": [{"lat": lat, "lon": lon} for lat, lon in zip(lats, lons)],
                 "costing": costing,
                 "format": "osrm",
                 "shape_match": "map_snap",
@@ -448,8 +349,8 @@ def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options) -> bool:
         )
 
         # Load GTFS data
-        loader = GTFSFeedLoader(gtfs_path)
-        gtfs_data = loader.load()
+        loader = GTFSFeed(feed_dir=gtfs_path)
+        loader.load()
 
         # Build OSM relations
         builder = OSMRelationBuilder(
@@ -459,7 +360,7 @@ def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options) -> bool:
             route_types=options.get("route_types"),
             agency_id=options.get("agency_id"),
         )
-        builder.build_relations(gtfs_data)
+        builder.build_relations(loader.tables)
 
         # Write to file
         builder.write_to_file(osm_path)
