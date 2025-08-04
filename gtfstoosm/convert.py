@@ -12,6 +12,10 @@ from typing import Any, Sequence
 import polars as pl
 from io import BytesIO
 import requests
+import atlus
+
+from gtfstoosm.osm import OSMRelation
+from gtfstoosm.utils import string_to_unique_int
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +100,7 @@ class GTFSFeedLoader:
 
                     # Convert to list of dictionaries
                     records = df.to_dicts()
-                    logger.info(f"Loaded {len(records)} records from {filename}")
+                    logger.info(f"Loaded {len(records):,} records from {filename}")
                     return records
 
         except zipfile.BadZipFile:
@@ -165,7 +169,7 @@ class OSMRelationBuilder:
         for stop in stops:
             # Convert GTFS stop to OSM node
             node = {
-                "id": f"gtfs:{stop['stop_id']}",
+                "id": stop["stop_id"],
                 "lat": stop["stop_lat"],
                 "lon": stop["stop_lon"],
                 "tags": {
@@ -201,6 +205,10 @@ class OSMRelationBuilder:
 
         # Placeholder for route processing logic
         for route in routes:
+            if route["route_id"].startswith("F8"):
+                pass
+            else:
+                continue
             # Get representative trip for this route
             route_trips = [t for t in trips if t["route_id"] == route["route_id"]]
             if not route_trips:
@@ -221,32 +229,30 @@ class OSMRelationBuilder:
 
             # Get the OSM ways that make up the route
             osm_way_ids = self._get_route_ways(stop_locations)
-            print("osm_way_ids: ", osm_way_ids)
             logger.info(
                 f"Found {len(osm_way_ids)} total ways for route {route['route_id']}"
             )
 
             # Create OSM relation
-            relation = {
-                "id": f"gtfs:route:{route['route_id']}",
-                "type": "route",
-                "tags": {
+            relation = OSMRelation(
+                **{
+                    "id": f"-{string_to_unique_int(route['route_id'])}",
                     "type": "route",
-                    "route": self._get_osm_route_type(route["route_type"]),
-                    "ref": route.get("route_short_name", ""),
-                    "name": route.get("route_long_name", ""),
-                    "gtfs:route_id": route["route_id"],
-                    "network": self._get_network_name(route, gtfs_data["agency"]),
-                },
-                "members": [],
-            }
+                    "tags": {
+                        "type": "route",
+                        "public_transport:version": "2",
+                        "route": self._get_osm_route_type(route["route_type"]),
+                        "ref": route.get("route_short_name", ""),
+                        "name": atlus.abbrs(route.get("route_long_name", "")),
+                        "network": self._get_network_name(route, gtfs_data["agency"]),
+                    },
+                    "members": [],
+                }
+            )
 
-            # Add stops as members
-            for stop_time in trip_stops:
-                stop_id = stop_time["stop_id"]
-                relation["members"].append(
-                    {"type": "node", "ref": f"gtfs:{stop_id}", "role": "platform"}
-                )
+            # Add ways as members
+            for way_id in osm_way_ids:
+                relation.add_member(**{"osm_type": "way", "ref": way_id, "role": ""})
 
             self.relations.append(relation)
 
@@ -394,31 +400,17 @@ class OSMRelationBuilder:
             with open(output_path, "w") as f:
                 f.write("<?xml version='1.0' encoding='UTF-8'?>\n")
                 f.write("<osmChange version='0.6' generator='gtfstoosm'>\n")
-                f.write("<modify>\n")
+                f.write("<create>\n")
 
                 # Write nodes
                 for node in self.nodes:
-                    f.write(
-                        f"  <node id='{node['id']}' lat='{node['lat']}' lon='{node['lon']}'>\n"
-                    )
-                    for k, v in node["tags"].items():
-                        f.write(f"    <tag k='{k}' v='{v}' />\n")
-                    f.write("  </node>\n")
+                    f.write(node.to_xml() + "\n")
 
                 # Write relations
                 for relation in self.relations:
-                    f.write(
-                        f"  <relation id='{relation['id']}' type='{relation['type']}'>\n"
-                    )
-                    for k, v in relation["tags"].items():
-                        f.write(f"    <tag k='{k}' v='{v}'></tag>\n")
-                    for member in relation["members"]:
-                        f.write(
-                            f"    <member type='{member['type']}' ref='{member['ref']}' role='{member['role']}'></member>\n"
-                        )
-                    f.write("  </relation>\n")
+                    f.write(relation.to_xml() + "\n")
 
-                f.write("</modify>\n</osm>\n")
+                f.write("</create>\n</osmChange>\n")
 
             logger.info(f"Successfully wrote OSM data to {output_path}")
 

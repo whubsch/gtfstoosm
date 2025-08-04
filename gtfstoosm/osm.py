@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Any
 from pydantic import BaseModel, Field
 import xml.dom.minidom
 import datetime
@@ -16,10 +16,6 @@ class OSMElement(BaseModel):
         if value is not None and value != "":
             self.tags[key] = value
 
-    def to_xml(self, doc: xml.dom.minidom.Document) -> xml.dom.minidom.Element:
-        """Create an XML element."""
-        raise NotImplementedError("Subclasses must implement to_xml")
-
 
 class OSMNode(OSMElement):
     lat: float
@@ -28,31 +24,18 @@ class OSMNode(OSMElement):
     version: int = 1
     changeset: int = 1
     timestamp: datetime.datetime = Field(
-        default_factory=lambda: datetime.datetime.utcnow()
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
     user: str = "gtfstoosm"
     uid: int = 1
 
-    def to_xml(self, doc: xml.dom.minidom.Document) -> xml.dom.minidom.Element:
-        """Create an XML node element."""
-        node = doc.createElement("node")
-        node.setAttribute("id", str(self.id))
-        node.setAttribute("lat", str(self.lat))
-        node.setAttribute("lon", str(self.lon))
-        node.setAttribute("visible", str(self.visible).lower())
-        node.setAttribute("version", str(self.version))
-        node.setAttribute("changeset", str(self.changeset))
-        node.setAttribute("timestamp", self.timestamp.strftime("%Y-%m-%dT%H:%M:%SZ"))
-        node.setAttribute("user", self.user)
-        node.setAttribute("uid", str(self.uid))
-
-        for key, value in self.tags.items():
-            tag = doc.createElement("tag")
-            tag.setAttribute("k", key)
-            tag.setAttribute("v", value)
-            node.appendChild(tag)
-
-        return node
+    def to_xml(self) -> str:
+        osm_text = f'<node id="{self.id}" lat="{self.lat}" lon="{self.lon}"'
+        osm_text += "\n".join(
+            [f"<tag k='{key}' v='{value}'></tag>" for key, value in self.tags.items()]
+        )
+        osm_text += "</node>"
+        return osm_text
 
 
 class OSMWay(OSMElement):
@@ -61,7 +44,7 @@ class OSMWay(OSMElement):
     version: int = 1
     changeset: int = 1
     timestamp: datetime.datetime = Field(
-        default_factory=lambda: datetime.datetime.utcnow()
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
     user: str = "gtfstoosm"
     uid: int = 1
@@ -70,35 +53,17 @@ class OSMWay(OSMElement):
         """Add a node to the way."""
         self.nodes.append(node_id)
 
-    def to_xml(self, doc: xml.dom.minidom.Document) -> xml.dom.minidom.Element:
-        """Create an XML way element."""
-        way = doc.createElement("way")
-        way.setAttribute("id", str(self.id))
-        way.setAttribute("visible", str(self.visible).lower())
-        way.setAttribute("version", str(self.version))
-        way.setAttribute("changeset", str(self.changeset))
-        way.setAttribute("timestamp", self.timestamp.strftime("%Y-%m-%dT%H:%M:%SZ"))
-        way.setAttribute("user", self.user)
-        way.setAttribute("uid", str(self.uid))
-
-        for node_id in self.nodes:
-            nd = doc.createElement("nd")
-            nd.setAttribute("ref", str(node_id))
-            way.appendChild(nd)
-
-        for key, value in self.tags.items():
-            tag = doc.createElement("tag")
-            tag.setAttribute("k", key)
-            tag.setAttribute("v", value)
-            way.appendChild(tag)
-
-        return way
-
 
 class RelationMember(BaseModel):
     type: Literal["node", "way", "relation"]
     ref: int
     role: str
+
+    def to_xml(self) -> str:
+        """Create an XML member element."""
+        return (
+            f'<member type="{self.type}" ref="{self.ref}" role="{self.role}"></member>'
+        )
 
 
 class OSMRelation(OSMElement):
@@ -107,7 +72,7 @@ class OSMRelation(OSMElement):
     version: int = 1
     changeset: int = 1
     timestamp: datetime.datetime = Field(
-        default_factory=lambda: datetime.datetime.utcnow()
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
     user: str = "gtfstoosm"
     uid: int = 1
@@ -122,33 +87,16 @@ class OSMRelation(OSMElement):
 
         self.members.append(RelationMember(type=osm_type, ref=ref, role=role))
 
-    def to_xml(self, doc: xml.dom.minidom.Document) -> xml.dom.minidom.Element:
+    def to_xml(self) -> str:
         """Create an XML relation element."""
-        relation = doc.createElement("relation")
-        relation.setAttribute("id", str(self.id))
-        relation.setAttribute("visible", str(self.visible).lower())
-        relation.setAttribute("version", str(self.version))
-        relation.setAttribute("changeset", str(self.changeset))
-        relation.setAttribute(
-            "timestamp", self.timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+        osm_text = f'<relation id="{self.id}" visible="{self.visible}">'
+
+        osm_text += "\n".join([member.to_xml() for member in self.members])
+        osm_text += "\n".join(
+            [f"<tag k='{key}' v='{value}'></tag>" for key, value in self.tags.items()]
         )
-        relation.setAttribute("user", self.user)
-        relation.setAttribute("uid", str(self.uid))
 
-        for member in self.members:
-            member_elem = doc.createElement("member")
-            member_elem.setAttribute("type", member.type)
-            member_elem.setAttribute("ref", str(member.ref))
-            member_elem.setAttribute("role", member.role)
-            relation.appendChild(member_elem)
-
-        for key, value in self.tags.items():
-            tag = doc.createElement("tag")
-            tag.setAttribute("k", key)
-            tag.setAttribute("v", value)
-            relation.appendChild(tag)
-
-        return relation
+        return osm_text + "</relation>"
 
 
 class OSMDocument(BaseModel):
@@ -188,7 +136,7 @@ class OSMDocument(BaseModel):
 
         # Add nodes
         for node in self.nodes.values():
-            root.appendChild(node.to_xml(doc))
+            root.appendChild(node.to_xml())
 
         # Add ways
         for way in self.ways.values():
