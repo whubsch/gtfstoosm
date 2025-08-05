@@ -6,7 +6,7 @@ converting it to OSM relations that can be imported into OpenStreetMap.
 """
 
 import logging
-from typing import Any
+from typing import Any, cast
 import requests
 import atlus
 import polars as pl
@@ -85,14 +85,19 @@ class OSMRelationBuilder:
                     "type": "route_master",
                     "route_master": "bus",
                     "ref": unique_route[0],
-                    "name": atlus.abbrs(unique_route[3]),
+                    "name": atlus.abbrs(
+                        atlus.get_title(unique_route[3], single_word=True)
+                    ),
                     "colour": "#" + unique_route[7],
                 },
             )
             for route in self.relations:
-                if route.tags.get("ref") == unique_route:
+                if route.tags.get("ref") == unique_route[0]:
                     master.add_member(osm_type="relation", ref=route.id)
             self.relations.append(master)
+        logger.info(
+            f"Built {len([i for i in self.relations if i.tags.get('route_master')])} route_master relations"
+        )
 
     def _process_stops(self, stops: pl.DataFrame) -> None:
         """
@@ -118,58 +123,79 @@ class OSMRelationBuilder:
         stop_times = gtfs_data["stop_times"]
         stops = gtfs_data["stops"]
 
-        logger.info(f"Processing {len(routes)} routes")
+        logger.info(f"Processing {routes.height} routes")
 
         # Filter routes by type if specified
         if self.route_types:
             routes = routes.filter(pl.col("route_type").is_in(self.route_types))
 
-        # Placeholder for route processing logic
-        for route in routes.iter_rows():
-            if route[0].startswith("F8"):
-                pass
-            else:
+        # Only process routes that start with 'P' for now
+        routes_to_process = routes.filter(pl.col("route_id").str.starts_with("P9"))
+
+        if routes_to_process.is_empty():
+            logger.info("No matching routes found")
+            return
+
+        logger.info(f"Processing {routes_to_process.height} filtered routes")
+
+        # Group trips by route_id
+        route_trips_grouped = trips.group_by("route_id", maintain_order=True)
+
+        # Process each route
+        for route_id, route_trips in route_trips_grouped:
+            route_ref: str = cast(str, route_id[0])
+
+            try:
+                # Get route information
+                route_info = routes_to_process.filter(
+                    pl.col("route_id") == route_ref
+                ).row(0)
+                logger.info(f"Processing route {route_ref}")
+
+            except pl.exceptions.OutOfBoundsError:
                 continue
 
-            logger.info(f"Processing route {route[0]}")
+            # Get all trip_ids for this route
+            trip_ids: list[int] = route_trips["trip_id"].to_list()
 
-            # Get trip variants for this route
-            route_trips = trips.filter(pl.col("route_id") == route[0])
-            if route_trips.is_empty():
-                continue
+            # Get all stop sequences for these trips
+            trip_stop_times = stop_times.filter(pl.col("trip_id").is_in(trip_ids))
 
-            route_trip_stops = []
-            for route_trip in route_trips.iter_rows():
-                # Get stop sequence for this trip variant
-                trip_stops = stop_times.filter(pl.col("trip_id") == route_trip[2])
-                trip_stops.sort("stop_sequence")
-
-                # Get the stop IDs from the stop_times
+            # Group stop times by trip_id and sort by stop_sequence
+            trip_sequences = []
+            for trip_id in trip_ids:
+                trip_stops = trip_stop_times.filter(pl.col("trip_id") == trip_id).sort(
+                    "stop_sequence"
+                )
                 stop_ids = trip_stops["stop_id"].to_list()
-                route_trip_stops.append(stop_ids)
+                trip_sequences.append(stop_ids)
 
             # Deduplicate stop sets
-            route_trip_stops = deduplicate_lists(route_trip_stops)
-            for route_trip_stop in route_trip_stops:
+            trip_sequences = deduplicate_lists(trip_sequences)
+
+            # Process each unique stop pattern
+            for trip_sequence in trip_sequences:
                 # Get the stop locations (with lat and long)
-                stop_locations = self._get_stop_locations(route_trip_stop, stops)
+                stop_locations = self._get_stop_locations(trip_sequence, stops)
 
                 # Get the OSM ways that make up the route
                 osm_way_ids = self._get_route_ways(stop_locations)
                 logger.info(
-                    f"Found {len(osm_way_ids)} total ways for route {route[0]} variant"
+                    f"Found {len(osm_way_ids)} total ways for route {route_ref} variant"
                 )
 
                 # Create OSM relation
                 relation = OSMRelation(
-                    id=-1 * random.randint(1, string_to_unique_int(route[0])),
+                    id=-1 * random.randint(1, string_to_unique_int(route_ref)),
                     tags={
                         "type": "route",
                         "public_transport:version": "2",
-                        "route": self._get_osm_route_type(route[5]),
-                        "ref": route[2],
-                        "name": atlus.abbrs(route[3]),
-                        "colour": "#" + route[7],
+                        "route": self._get_osm_route_type(route_info[5]),
+                        "ref": route_info[2],
+                        "name": atlus.abbrs(
+                            atlus.get_title(route_info[3], single_word=True)
+                        ),
+                        "colour": "#" + route_info[7],
                     },
                     members=[],
                 )
@@ -247,6 +273,11 @@ class OSMRelationBuilder:
         request_json = {
             "shape": [{"lat": lat, "lon": lon} for lat, lon in zip(lats, lons)],
             "costing": costing,
+            "costing_options": {
+                "maneuver_penalty": 10,
+                "include_hov2": True,
+                "include_hov3": True,
+            },
             "format": "osrm",
             "shape_match": "map_snap",
             "filters": {"attributes": ["edge.way_id", "edge.names"]},
@@ -256,7 +287,13 @@ class OSMRelationBuilder:
         retry_count = 0
         while retry_count <= max_retries:
             try:
-                response = requests.post(valhalla_url, json=request_json).json()
+                response = requests.post(
+                    valhalla_url,
+                    json=request_json,
+                    headers={
+                        "User-Agent": "gtfstoosm (https://github.com/whubsch/gtfstoosm)"
+                    },
+                ).json()
 
                 # Check if the response contains the expected data
                 if "edges" in response:
