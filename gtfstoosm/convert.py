@@ -8,11 +8,12 @@ converting it to OSM relations that can be imported into OpenStreetMap.
 import logging
 from typing import Any, cast
 import requests
+import time
 import atlus
 import polars as pl
 import random
 
-from gtfstoosm.osm import OSMNode, OSMRelation
+from gtfstoosm.osm import OSMElement, OSMNode, OSMRelation
 from gtfstoosm.utils import string_to_unique_int, deduplicate_lists
 from gtfstoosm.gtfs import GTFSFeed
 
@@ -57,11 +58,11 @@ class OSMRelationBuilder:
         """
         logger.info("Building OSM relations from GTFS data")
 
-        if self.include_stops:
-            self._process_stops(gtfs_data["stops"])
+        # if self.include_stops:
+        #     self._process_stops(gtfs_data["stops"])
 
         if self.include_routes:
-            self._process_routes(gtfs_data)
+            self._process_routes(gtfs_data, include_stops=self.include_stops)
 
         logger.info(
             f"Built {len(self.relations)} route relations and {len(self.nodes)} nodes"
@@ -85,9 +86,8 @@ class OSMRelationBuilder:
                     "type": "route_master",
                     "route_master": "bus",
                     "ref": unique_route[0],
-                    "name": atlus.abbrs(
-                        atlus.get_title(unique_route[3], single_word=True)
-                    ),
+                    "name": f"WMATA {unique_route[0]} "
+                    + atlus.abbrs(atlus.get_title(unique_route[3], single_word=True)),
                     "colour": "#" + unique_route[7],
                 },
             )
@@ -111,12 +111,15 @@ class OSMRelationBuilder:
         # Placeholder for stop processing logic
         raise NotImplementedError("Stop processing not implemented yet")
 
-    def _process_routes(self, gtfs_data: dict[str, pl.DataFrame]) -> None:
+    def _process_routes(
+        self, gtfs_data: dict[str, pl.DataFrame], include_stops: bool
+    ) -> None:
         """
         Process GTFS routes and convert them to OSM relations.
 
         Args:
             gtfs_data: Complete GTFS data dictionary
+            include_stops: Whether to include stops in the output relations
         """
         routes = gtfs_data["routes"]
         trips = gtfs_data["trips"]
@@ -131,10 +134,6 @@ class OSMRelationBuilder:
 
         # Only process routes that start with 'P' for now
         routes_to_process = routes.filter(pl.col("route_id").str.starts_with("P9"))
-
-        if routes_to_process.is_empty():
-            logger.info("No matching routes found")
-            return
 
         logger.info(f"Processing {routes_to_process.height} filtered routes")
 
@@ -177,6 +176,7 @@ class OSMRelationBuilder:
             for trip_sequence in trip_sequences:
                 # Get the stop locations (with lat and long)
                 stop_locations = self._get_stop_locations(trip_sequence, stops)
+                stop_objects = self._get_stop_objects(stop_locations)
 
                 # Get the OSM ways that make up the route
                 osm_way_ids = self._get_route_ways(stop_locations)
@@ -192,19 +192,180 @@ class OSMRelationBuilder:
                         "public_transport:version": "2",
                         "route": self._get_osm_route_type(route_info[5]),
                         "ref": route_info[2],
-                        "name": atlus.abbrs(
-                            atlus.get_title(route_info[3], single_word=True)
-                        ),
+                        "name": f"WMATA {route_info[2]} "
+                        + atlus.abbrs(atlus.get_title(route_info[3], single_word=True)),
                         "colour": "#" + route_info[7],
                     },
                     members=[],
                 )
+
+                # Add stop objects as members
+                for stop_object in stop_objects:
+                    relation.add_member(
+                        osm_type="node", ref=stop_object.id, role="platform"
+                    )
 
                 # Add ways as members
                 for way_id in osm_way_ids:
                     relation.add_member(osm_type="way", ref=way_id)
 
                 self.relations.append(relation)
+
+    def _get_stop_objects(self, stops: pl.DataFrame) -> list[OSMElement]:
+        """
+        Get OSM elements for stops by querying nearby bus stops from OpenStreetMap.
+
+        Args:
+            stops: DataFrame containing stop information with lat, lon, name, and stop_id columns
+
+        Returns:
+            List of OSMElement objects representing nearby bus stops, ordered to match input stops
+        """
+        if stops.is_empty():
+            return []
+
+        osm_elements = []
+        overpass_url = "https://overpass-api.de/api/interpreter"
+
+        # Build a single query with all coordinates
+        around_clauses = [
+            f"(around:5,{stop_row['lat']},{stop_row['lon']})"
+            for stop_row in stops.iter_rows(named=True)
+        ]
+
+        query_meat = "\n".join(
+            f"""
+        node["highway"="bus_stop"]{around};
+        node["public_transport"="platform"]{around};
+        """
+            for around in around_clauses
+        )
+
+        query = f"""
+        [out:json][timeout:60];
+        (
+        {query_meat}
+        );
+        out geom;
+        """
+
+        max_retries = 3
+        retry_count = 0
+
+        while retry_count <= max_retries:
+            try:
+                logger.info(
+                    f"Querying Overpass API for {stops.height} stop locations (attempt {retry_count + 1})"
+                )
+                response = requests.post(
+                    overpass_url,
+                    data=query,
+                    headers={
+                        "User-Agent": "gtfstoosm (https://github.com/whubsch/gtfstoosm)"
+                    },
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+
+                    # Create OSMNode objects from all results
+                    all_osm_nodes = []
+                    for element in result.get("elements", []):
+                        if element["type"] == "node":
+                            osm_node = OSMNode(
+                                id=element["id"],
+                                lat=element["lat"],
+                                lon=element["lon"],
+                                tags=element.get("tags", {}),
+                            )
+                            all_osm_nodes.append(osm_node)
+
+                    # Now match each input stop to its nearest OSM node
+                    for stop_row in stops.iter_rows(named=True):
+                        stop_lat = stop_row["lat"]
+                        stop_lon = stop_row["lon"]
+
+                        # Find the closest OSM node to this stop
+                        closest_node = None
+                        min_distance = float("inf")
+
+                        for osm_node in all_osm_nodes:
+                            # Calculate distance using Haversine formula (approximate)
+                            distance = self._calculate_distance(
+                                stop_lat, stop_lon, osm_node.lat, osm_node.lon
+                            )
+
+                            if (
+                                distance < min_distance and distance <= 5
+                            ):  # Within 5 meter radius
+                                min_distance = distance
+                                closest_node = osm_node
+
+                        # Add the closest node (or None if no match within 5m)
+                        if closest_node:
+                            osm_elements.append(closest_node)
+                            # Remove from pool to avoid duplicate matches
+                            all_osm_nodes.remove(closest_node)
+                        else:
+                            logger.debug(
+                                f"No OSM stop found within 5m of GTFS stop at {stop_lat}, {stop_lon}"
+                            )
+
+                    # Success - break out of retry loop
+                    break
+
+                elif response.status_code == 429:
+                    retry_count += 1
+                    if retry_count <= max_retries:
+                        logger.warning(
+                            f"Rate limited by Overpass API (HTTP 429). Retrying in 2 seconds... (attempt {retry_count + 1}/{max_retries + 1})"
+                        )
+                        time.sleep(2)
+                    else:
+                        logger.error(
+                            f"Rate limited by Overpass API (HTTP 429). Max retries ({max_retries}) exceeded."
+                        )
+                        break
+                else:
+                    logger.warning(
+                        f"Failed to query Overpass API: HTTP {response.status_code}"
+                    )
+                    break
+
+            except Exception as e:
+                logger.warning(f"Error querying nearby stops: {str(e)}")
+                break
+
+        logger.info(f"Found {len(osm_elements)} OSM stop elements (ordered)")
+        return osm_elements
+
+    def _calculate_distance(
+        self, lat1: float, lon1: float, lat2: float, lon2: float
+    ) -> float:
+        """
+        Calculate the distance between two points using Haversine formula.
+
+        Returns:
+            Distance in meters
+        """
+        import math
+
+        # Convert latitude and longitude from degrees to radians
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+
+        # Haversine formula
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        )
+        c = 2 * math.asin(math.sqrt(a))
+
+        # Radius of earth in meters
+        r = 6371000
+
+        return c * r
 
     def _get_stop_locations(
         self, stop_ids: list[str], stops: pl.DataFrame
