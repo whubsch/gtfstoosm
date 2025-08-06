@@ -1,4 +1,12 @@
 from typing import Any
+from pydantic import BaseModel
+
+
+class Trip(BaseModel):
+    trip_id: int
+    route_id: str
+    shape_id: str
+    stops: list[int]
 
 
 def string_to_unique_int(text: str, max_int: int = 2**31 - 1) -> int:
@@ -14,10 +22,24 @@ def string_to_unique_int(text: str, max_int: int = 2**31 - 1) -> int:
     return hash_value % max_int  # Ensure it's within range
 
 
-def deduplicate_lists(nested_list: list[list[Any]]) -> list[list[Any]]:
-    # Convert inner lists to tuples for hashing
-    tuple_list = [tuple(inner_list) for inner_list in nested_list]
-    # Create a set to remove duplicates
-    unique_tuples = set(tuple_list)
-    # Convert back to lists
-    return [list(t) for t in unique_tuples]
+def deduplicate_trips(trips: list[Trip]) -> list[Trip]:
+    """
+    Remove duplicate trips based on their stops attribute.
+
+    Args:
+        trips: List of Trip objects to deduplicate
+
+    Returns:
+        List of unique Trip objects (first occurrence kept for each unique stops sequence)
+    """
+    seen_stops = set()
+    unique_trips = []
+
+    for trip in trips:
+        # Convert stops list to tuple for hashing
+        stops_tuple = tuple(trip.stops)
+        if stops_tuple not in seen_stops:
+            seen_stops.add(stops_tuple)
+            unique_trips.append(trip)
+
+    return unique_trips

@@ -28,6 +28,7 @@ class GTFSFeed(BaseModel):
             "routes.txt",
             "trips.txt",
             "stop_times.txt",
+            "shapes.txt",
         ]
     )
     optional_files: list[str] = Field(
@@ -36,7 +37,6 @@ class GTFSFeed(BaseModel):
             "calendar_dates.txt",
             "fare_attributes.txt",
             "fare_rules.txt",
-            "shapes.txt",
             "frequencies.txt",
             "transfers.txt",
             "pathways.txt",

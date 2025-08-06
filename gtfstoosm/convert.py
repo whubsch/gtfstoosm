@@ -14,7 +14,7 @@ import polars as pl
 import random
 
 from gtfstoosm.osm import OSMElement, OSMNode, OSMRelation
-from gtfstoosm.utils import string_to_unique_int, deduplicate_lists
+from gtfstoosm.utils import string_to_unique_int, deduplicate_trips, Trip
 from gtfstoosm.gtfs import GTFSFeed
 
 logger = logging.getLogger(__name__)
@@ -125,6 +125,7 @@ class OSMRelationBuilder:
         trips = gtfs_data["trips"]
         stop_times = gtfs_data["stop_times"]
         stops = gtfs_data["stops"]
+        shapes = gtfs_data["shapes"]
 
         logger.info(f"Processing {routes.height} routes")
 
@@ -133,7 +134,7 @@ class OSMRelationBuilder:
             routes = routes.filter(pl.col("route_type").is_in(self.route_types))
 
         # Only process routes that start with 'P' for now
-        routes_to_process = routes.filter(pl.col("route_id").str.starts_with("P9"))
+        routes_to_process = routes.filter(pl.col("route_id").str.starts_with("P7"))
 
         logger.info(f"Processing {routes_to_process.height} filtered routes")
 
@@ -162,24 +163,32 @@ class OSMRelationBuilder:
 
             # Group stop times by trip_id and sort by stop_sequence
             trip_sequences = []
-            for trip_id in trip_ids:
+            for route_trip in route_trips.iter_rows():
+                trip_id = route_trip[2]
                 trip_stops = trip_stop_times.filter(pl.col("trip_id") == trip_id).sort(
                     "stop_sequence"
                 )
                 stop_ids = trip_stops["stop_id"].to_list()
-                trip_sequences.append(stop_ids)
+                trip_sequences.append(
+                    Trip(
+                        trip_id=trip_id,
+                        route_id=route_ref,
+                        shape_id=route_trip[6],
+                        stops=stop_ids,
+                    )
+                )
 
             # Deduplicate stop sets
-            trip_sequences = deduplicate_lists(trip_sequences)
+            trip_sequences = deduplicate_trips(trip_sequences)
 
             # Process each unique stop pattern
             for trip_sequence in trip_sequences:
                 # Get the stop locations (with lat and long)
-                stop_locations = self._get_stop_locations(trip_sequence, stops)
+                stop_locations = self._get_stop_locations(trip_sequence.stops, stops)
                 stop_objects = self._get_stop_objects(stop_locations)
 
                 # Get the OSM ways that make up the route
-                osm_way_ids = self._get_route_ways(stop_locations)
+                osm_way_ids = self._get_route_ways(trip_sequence.shape_id, shapes)
                 logger.info(
                     f"Found {len(osm_way_ids)} total ways for route {route_ref} variant"
                 )
@@ -405,7 +414,8 @@ class OSMRelationBuilder:
 
     def _get_route_ways(
         self,
-        stop_locations: pl.DataFrame,
+        shape_id: str,
+        shapes: pl.DataFrame,
         costing: str = "bus",
         max_retries: int = 3,
         retry_delay: float = 2.0,
@@ -422,14 +432,18 @@ class OSMRelationBuilder:
         Returns:
             List of unique OSM way IDs that make up the route
         """
-        logger.info(f"Getting OSM ways for route with {stop_locations.height} stops")
+        logger.info(f"Getting OSM ways for route {shape_id}")
+
+        filtered_shapes = shapes.filter(pl.col("shape_id") == shape_id).sort(
+            "shape_pt_sequence"
+        )
 
         route_ways = []
 
         # Get the input data for the request
         valhalla_url = "https://valhalla1.openstreetmap.de/trace_attributes"
-        lats = stop_locations["lat"].to_list()
-        lons = stop_locations["lon"].to_list()
+        lats = filtered_shapes["shape_pt_lat"].to_list()
+        lons = filtered_shapes["shape_pt_lon"].to_list()
 
         request_json = {
             "shape": [{"lat": lat, "lon": lon} for lat, lon in zip(lats, lons)],
