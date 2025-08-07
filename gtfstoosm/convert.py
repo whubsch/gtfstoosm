@@ -79,20 +79,24 @@ class OSMRelationBuilder:
             pl.col("route_id").is_in(made_routes)
         )
 
-        for unique_route in unique_routes.iter_rows():
+        for unique_route in unique_routes.iter_rows(named=True):
             master = OSMRelation(
                 id=-1 * random.randint(1, 10**6),
                 tags={
                     "type": "route_master",
                     "route_master": "bus",
-                    "ref": unique_route[0],
-                    "name": f"WMATA {unique_route[0]} "
-                    + atlus.abbrs(atlus.get_title(unique_route[3], single_word=True)),
-                    "colour": "#" + unique_route[7],
+                    "ref": unique_route["route_id"],
+                    "name": f"WMATA {unique_route['route_id']} "
+                    + atlus.abbrs(
+                        atlus.get_title(
+                            unique_route["route_long_name"], single_word=True
+                        )
+                    ),
+                    "colour": "#" + unique_route["route_color"],
                 },
             )
             for route in self.relations:
-                if route.tags.get("ref") == unique_route[0]:
+                if route.tags.get("ref") == unique_route["route_id"]:
                     master.add_member(osm_type="relation", ref=route.id)
             self.relations.append(master)
         logger.info(
@@ -134,7 +138,7 @@ class OSMRelationBuilder:
             routes = routes.filter(pl.col("route_type").is_in(self.route_types))
 
         # Only process routes that start with 'P' for now
-        routes_to_process = routes.filter(pl.col("route_id").str.starts_with("P7"))
+        routes_to_process = routes.filter(pl.col("route_id").str.starts_with(""))
 
         logger.info(f"Processing {routes_to_process.height} filtered routes")
 
@@ -163,8 +167,8 @@ class OSMRelationBuilder:
 
             # Group stop times by trip_id and sort by stop_sequence
             trip_sequences = []
-            for route_trip in route_trips.iter_rows():
-                trip_id = route_trip[2]
+            for route_trip in route_trips.iter_rows(named=True):
+                trip_id = route_trip["trip_id"]
                 trip_stops = trip_stop_times.filter(pl.col("trip_id") == trip_id).sort(
                     "stop_sequence"
                 )
@@ -173,7 +177,7 @@ class OSMRelationBuilder:
                     Trip(
                         trip_id=trip_id,
                         route_id=route_ref,
-                        shape_id=route_trip[6],
+                        shape_id=route_trip["shape_id"],
                         stops=stop_ids,
                     )
                 )
@@ -377,7 +381,7 @@ class OSMRelationBuilder:
         return c * r
 
     def _get_stop_locations(
-        self, stop_ids: list[str], stops: pl.DataFrame
+        self, stop_ids: list[int], stops: pl.DataFrame
     ) -> pl.DataFrame:
         """
         Get location information for a list of stop IDs.
@@ -414,7 +418,7 @@ class OSMRelationBuilder:
 
     def _get_route_ways(
         self,
-        shape_id: str,
+        shape_id: str | int,
         shapes: pl.DataFrame,
         costing: str = "bus",
         max_retries: int = 3,

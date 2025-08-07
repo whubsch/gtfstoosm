@@ -1,11 +1,10 @@
-from typing import Any
 from pydantic import BaseModel
 
 
 class Trip(BaseModel):
     trip_id: int
-    route_id: str
-    shape_id: str
+    route_id: str | int
+    shape_id: str | int
     stops: list[int]
 
 
