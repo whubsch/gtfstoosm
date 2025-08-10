@@ -58,33 +58,27 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--include-stops",
-        dest="include_stops",
-        action="store_true",
-        default=True,
-        help="Include stops in the output (default: True)",
-    )
-
-    parser.add_argument(
         "--exclude-stops",
-        dest="include_stops",
+        dest="exclude_stops",
         action="store_false",
+        default=False,
         help="Exclude stops from the output",
     )
 
     parser.add_argument(
-        "--include-routes",
-        dest="include_routes",
-        action="store_true",
-        default=True,
-        help="Include routes in the output (default: True)",
+        "--exclude-routes",
+        dest="exclude_routes",
+        action="store_false",
+        default=False,
+        help="Exclude routes from the output",
     )
 
     parser.add_argument(
-        "--exclude-routes",
-        dest="include_routes",
-        action="store_false",
-        help="Exclude routes from the output",
+        "--add-missing-stops",
+        dest="add_missing_stops",
+        action="store_true",
+        default=False,
+        help="Add stops missing from the database to the output (default: False)",
     )
 
     parser.add_argument(
@@ -134,6 +128,16 @@ def main(args: list[str] | None = None) -> int:
             logger.error(f"Input GTFS feed not found: {parsed_args.input_feed}")
             return 1
 
+        # Validate add missing stops
+        if parsed_args.add_missing_stops and parsed_args.exclude_stops:
+            logger.error("Cannot add missing stops without including stops")
+            return 1
+
+        # Validate something is included
+        if parsed_args.exclude_stops and parsed_args.exclude_routes:
+            logger.error("Nothing to convert")
+            return 1
+
         # Validate output directory
         output_dir = os.path.dirname(parsed_args.output_file)
         if output_dir and not os.path.exists(output_dir):
@@ -142,11 +146,14 @@ def main(args: list[str] | None = None) -> int:
 
         # Convert GTFS to OSM
         options = {
-            "include_stops": parsed_args.include_stops,
-            "include_routes": parsed_args.include_routes,
+            "exclude_stops": parsed_args.exclude_stops,
+            "exclude_routes": parsed_args.exclude_routes,
+            "add_missing_stops": parsed_args.add_missing_stops,
             "route_types": parsed_args.route_types,
             "agency_id": parsed_args.agency_id,
         }
+
+        logger.debug(f"CLI options: {options}")
 
         convert_gtfs_to_osm(parsed_args.input_feed, parsed_args.output_file, **options)
 

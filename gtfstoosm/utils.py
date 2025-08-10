@@ -1,4 +1,6 @@
 from pydantic import BaseModel
+import re
+import atlus
 
 
 class Trip(BaseModel):
@@ -42,3 +44,43 @@ def deduplicate_trips(trips: list[Trip]) -> list[Trip]:
             unique_trips.append(trip)
 
     return unique_trips
+
+
+# Use a capturing group to keep the separators in the result
+split_compile = re.compile(r"([/\-–—|\\~])")
+
+
+def format_name(name: str) -> str:
+    """
+    Format a name for use in OSM.
+
+    Args:
+        name: The input name
+    """
+    # Remove leading and trailing whitespace
+    name = name.strip(" ,;").replace("  ", " ")
+
+    # Split the text while capturing the separators
+    parts = split_compile.split(name)
+
+    processed_parts = []
+
+    for i, part in enumerate(parts):
+        # If this is a separator (which will be at odd indices after the split)
+        if i % 2 == 1:
+            # This is a separator, keep it as is
+            processed_parts.append(part)
+        elif part.strip():  # Non-empty text part
+            # Process through atlus.abbrs and clean up whitespace
+            part = part.strip()
+            abbreviated = atlus.abbrs(
+                atlus.get_title(part, single_word=bool(" " not in part))
+            )
+            processed_parts.append(abbreviated)
+
+    return (
+        "".join(processed_parts)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )

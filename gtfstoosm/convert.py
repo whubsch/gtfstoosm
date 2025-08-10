@@ -6,7 +6,7 @@ converting it to OSM relations that can be imported into OpenStreetMap.
 """
 
 import logging
-from typing import Any, cast
+from typing import Any
 import requests
 import time
 import atlus
@@ -14,7 +14,7 @@ import polars as pl
 import random
 
 from gtfstoosm.osm import OSMElement, OSMNode, OSMRelation
-from gtfstoosm.utils import string_to_unique_int, deduplicate_trips, Trip
+from gtfstoosm.utils import string_to_unique_int, deduplicate_trips, Trip, format_name
 from gtfstoosm.gtfs import GTFSFeed
 
 logger = logging.getLogger(__name__)
@@ -25,8 +25,9 @@ class OSMRelationBuilder:
 
     def __init__(
         self,
-        include_stops: bool = False,
-        include_routes: bool = True,
+        exclude_stops: bool = False,
+        exclude_routes: bool = False,
+        add_missing_stops: bool = False,
         route_types: list[int] | None = None,
         agency_id: str | None = None,
     ):
@@ -34,20 +35,23 @@ class OSMRelationBuilder:
         Initialize the OSM relation builder.
 
         Args:
-            include_stops: Whether to include stops in the output
-            include_routes: Whether to include routes in the output
+            exclude_stops: Whether to include stops in the output
+            exclude_routes: Whether to include routes in the output
+            add_missing_stops: Whether to add stops missing from the database to the output
             route_types: List of route types to include (GTFS route_type values)
             agency_id: Only include routes for this agency
         """
-        self.include_stops = include_stops
-        self.include_routes = include_routes
+        self.exclude_stops = exclude_stops
+        self.exclude_routes = exclude_routes
+        self.add_missing_stops = add_missing_stops
         self.route_types = route_types
         self.agency_id = agency_id
         self.relations: list[OSMRelation] = []
         self.nodes: list[OSMNode] = []
+        self.new_stops: list[OSMNode] = []
 
     def __str__(self) -> str:
-        return f"OSMRelationBuilder(include_stops={self.include_stops}, include_routes={self.include_routes}, route_types={self.route_types}, agency_id={self.agency_id})"
+        return f"OSMRelationBuilder(exclude_stops={self.exclude_stops}, exclude_routes={self.exclude_routes}, add_missing_stops={self.add_missing_stops}, route_types={self.route_types}, agency_id={self.agency_id})"
 
     def build_relations(self, gtfs_data: dict[str, pl.DataFrame]) -> None:
         """
@@ -58,14 +62,10 @@ class OSMRelationBuilder:
         """
         logger.info("Building OSM relations from GTFS data")
 
-        # if self.include_stops:
-        #     self._process_stops(gtfs_data["stops"])
-
-        if self.include_routes:
-            self._process_routes(gtfs_data, include_stops=self.include_stops)
+        self._process_routes(gtfs_data)
 
         logger.info(
-            f"Built {len(self.relations)} route relations and {len(self.nodes)} nodes"
+            f"Built {len(self.relations)} route relations and {len(self.nodes) + len(self.new_stops)} nodes"
         )
 
     def build_route_masters(self, gtfs_data: dict[str, pl.DataFrame]) -> None:
@@ -103,21 +103,7 @@ class OSMRelationBuilder:
             f"Built {len([i for i in self.relations if i.tags.get('route_master')])} route_master relations"
         )
 
-    def _process_stops(self, stops: pl.DataFrame) -> None:
-        """
-        Process GTFS stops and convert them to OSM nodes.
-
-        Args:
-            stops: List of GTFS stop dictionaries
-        """
-        logger.info(f"Processing {len(stops)} stops")
-
-        # Placeholder for stop processing logic
-        raise NotImplementedError("Stop processing not implemented yet")
-
-    def _process_routes(
-        self, gtfs_data: dict[str, pl.DataFrame], include_stops: bool
-    ) -> None:
+    def _process_routes(self, gtfs_data: dict[str, pl.DataFrame]) -> None:
         """
         Process GTFS routes and convert them to OSM relations.
 
@@ -138,7 +124,8 @@ class OSMRelationBuilder:
             routes = routes.filter(pl.col("route_type").is_in(self.route_types))
 
         # Only process routes that start with 'P' for now
-        routes_to_process = routes.filter(pl.col("route_id").str.starts_with(""))
+        routes_to_process = routes.filter(pl.col("route_id").str.starts_with("M54"))
+        # routes_to_process = routes
 
         logger.info(f"Processing {routes_to_process.height} filtered routes")
 
@@ -147,7 +134,7 @@ class OSMRelationBuilder:
 
         # Process each route
         for route_id, route_trips in route_trips_grouped:
-            route_ref: str = cast(str, route_id[0])
+            route_ref = str(route_id[0])
 
             try:
                 # Get route information
@@ -188,14 +175,19 @@ class OSMRelationBuilder:
             # Process each unique stop pattern
             for trip_sequence in trip_sequences:
                 # Get the stop locations (with lat and long)
-                stop_locations = self._get_stop_locations(trip_sequence.stops, stops)
-                stop_objects = self._get_stop_objects(stop_locations)
+                stop_objects = []
+                if not self.exclude_stops:
+                    stop_locations = self._get_stop_locations(
+                        trip_sequence.stops, stops
+                    )
+                    stop_objects = self._get_stop_objects(
+                        stop_locations, self.add_missing_stops
+                    )
 
                 # Get the OSM ways that make up the route
-                osm_way_ids = self._get_route_ways(trip_sequence.shape_id, shapes)
-                logger.info(
-                    f"Found {len(osm_way_ids)} total ways for route {route_ref} variant"
-                )
+                osm_way_ids = []
+                if not self.exclude_routes:
+                    osm_way_ids = self._get_route_ways(trip_sequence.shape_id, shapes)
 
                 # Create OSM relation
                 relation = OSMRelation(
@@ -205,8 +197,7 @@ class OSMRelationBuilder:
                         "public_transport:version": "2",
                         "route": self._get_osm_route_type(route_info[5]),
                         "ref": route_info[2],
-                        "name": f"WMATA {route_info[2]} "
-                        + atlus.abbrs(atlus.get_title(route_info[3], single_word=True)),
+                        "name": f"WMATA {route_info[2]} " + format_name(route_info[3]),
                         "colour": "#" + route_info[7],
                     },
                     members=[],
@@ -224,12 +215,15 @@ class OSMRelationBuilder:
 
                 self.relations.append(relation)
 
-    def _get_stop_objects(self, stops: pl.DataFrame) -> list[OSMElement]:
+    def _get_stop_objects(
+        self, stops: pl.DataFrame, add_missing_stops: bool
+    ) -> list[OSMElement]:
         """
         Get OSM elements for stops by querying nearby bus stops from OpenStreetMap.
 
         Args:
             stops: DataFrame containing stop information with lat, lon, name, and stop_id columns
+            add_missing_stops: Whether to add stops missing from the database to the output
 
         Returns:
             List of OSMElement objects representing nearby bus stops, ordered to match input stops
@@ -246,7 +240,7 @@ class OSMRelationBuilder:
             for stop_row in stops.iter_rows(named=True)
         ]
 
-        query_meat = "\n".join(
+        query_body = "\n".join(
             f"""
         node["highway"="bus_stop"]{around};
         node["public_transport"="platform"]{around};
@@ -257,7 +251,7 @@ class OSMRelationBuilder:
         query = f"""
         [out:json][timeout:60];
         (
-        {query_meat}
+        {query_body}
         );
         out geom;
         """
@@ -323,6 +317,26 @@ class OSMRelationBuilder:
                             logger.debug(
                                 f"No OSM stop found within 5m of GTFS stop at {stop_lat}, {stop_lon}"
                             )
+                            if add_missing_stops:
+                                # Add the stop to the output
+                                new_stop = OSMNode(
+                                    id=-1 * stop_row["stop_id"],
+                                    lat=stop_lat,
+                                    lon=stop_lon,
+                                    tags={
+                                        "name": stop_row["name"],
+                                        "public_transport": "platform",
+                                        "highway": "bus_stop",
+                                    },
+                                )
+                                if not self.is_stop_duplicate(new_stop):
+                                    logger.debug(f"Adding new stop {new_stop.id}")
+                                    self.new_stops.append(new_stop)
+                                else:
+                                    logger.debug(
+                                        f"Skipping duplicate stop {new_stop.id}"
+                                    )
+                                osm_elements.append(new_stop)
 
                     # Success - break out of retry loop
                     break
@@ -428,7 +442,8 @@ class OSMRelationBuilder:
         Get OSM way IDs for a route between stops using Valhalla API.
 
         Args:
-            stop_locations: List of dictionaries containing stop information with lat and lon
+            shape_id: GTFS shape ID
+            shapes: Complete list of GTFS shapes data
             costing: Valhalla costing model to use (bus, auto, pedestrian, etc.)
             max_retries: Maximum number of retry attempts if request fails
             retry_delay: Delay in seconds between retry attempts
@@ -446,11 +461,14 @@ class OSMRelationBuilder:
 
         # Get the input data for the request
         valhalla_url = "https://valhalla1.openstreetmap.de/trace_attributes"
-        lats = filtered_shapes["shape_pt_lat"].to_list()
-        lons = filtered_shapes["shape_pt_lon"].to_list()
 
         request_json = {
-            "shape": [{"lat": lat, "lon": lon} for lat, lon in zip(lats, lons)],
+            "shape": [
+                {"lat": lat, "lon": lon}
+                for lat, lon in filtered_shapes.select(
+                    ["shape_pt_lat", "shape_pt_lon"]
+                ).iter_rows()
+            ],
             "costing": costing,
             "costing_options": {
                 "maneuver_penalty": 10,
@@ -503,6 +521,8 @@ class OSMRelationBuilder:
             else:
                 logger.error(f"Failed to get ways after {max_retries + 1} attempts")
                 break
+
+        logger.info(f"Found {len(route_ways)} total ways for route {shape_id} variant")
 
         return route_ways
 
@@ -560,6 +580,15 @@ class OSMRelationBuilder:
         # Default if no agency found
         return ""
 
+    def is_stop_duplicate(self, new_stop):
+        """Check if a stop is already in self.new_stops."""
+        for existing_stop in self.new_stops:
+            # Check if ID matches
+            if existing_stop.id == new_stop.id:
+                return True
+
+        return False
+
     def write_to_file(self, output_path: str) -> None:
         """
         Write the OSM data to a file.
@@ -575,6 +604,10 @@ class OSMRelationBuilder:
                 f.write("<?xml version='1.0' encoding='UTF-8'?>\n")
                 f.write("<osmChange version='0.6' generator='gtfstoosm'>\n")
                 f.write("<create>\n")
+
+                # Write new stops
+                for stop in self.new_stops:
+                    f.write(stop.to_xml() + "\n")
 
                 # Write nodes
                 for node in self.nodes:
@@ -601,8 +634,9 @@ def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options) -> bool:
         gtfs_path: Path to the GTFS feed zip file
         osm_path: Path to write the OSM XML file
         **options: Additional options for the conversion
-            - include_stops: Whether to include stops (default: True)
-            - include_routes: Whether to include routes (default: True)
+            - exclude_stops: Whether to include stops (default: False)
+            - exclude_routes: Whether to include routes (default: False)
+            - add_missing_stops: Whether to add stops missing from the database to the output (default: False)
             - route_types: List of route types to include (default: None = all)
             - agency_id: Only include routes for this agency (default: None = all)
 
@@ -627,12 +661,15 @@ def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options) -> bool:
 
         # Build OSM relations
         builder = OSMRelationBuilder(
-            # include_stops=options.get("include_stops", False),
-            include_stops=False,
-            include_routes=options.get("include_routes", True),
+            exclude_stops=options.get("exclude_stops", False),
+            exclude_routes=options.get("exclude_routes", False),
+            add_missing_stops=options.get("add_missing_stops", False),
             route_types=options.get("route_types"),
             agency_id=options.get("agency_id"),
         )
+
+        logger.debug(f"OSMRelationBuilder options: {builder}")
+
         builder.build_relations(loader.tables)
         builder.build_route_masters(loader.tables)
 

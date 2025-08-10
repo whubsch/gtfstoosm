@@ -21,13 +21,12 @@ python -m gtfstoosm.cli --input /path/to/gtfs.zip --output output.osc
 
 ### Optional Arguments
 
-- `--include-stops`: Include stops in the output (default: False)
 - `--exclude-stops`: Exclude stops from the output
-- `--include-routes`: Include routes in the output (default: True)
 - `--exclude-routes`: Exclude routes from the output
+- `--add-missing-stops`: Add missing stops to the output
 - `--route-types`: Only include routes with specific GTFS route_type values (space-separated)
 - `--agency`: Only include routes for a specific agency ID
-- `--verbose`, `-v`: Enable verbose logging
+- `--verbose`, `-v`: Enable verbose logging for debugging
 
 ## Examples
 
@@ -81,15 +80,15 @@ The converter generates standard OSM XML files containing:
 
 1. Nodes for transit stops with appropriate tags:
    - `public_transport=platform`
+   - `highway=bus_stop`
    - `name=*` (from GTFS stop_name)
-   - `gtfs:stop_id=*` (original GTFS ID)
 
 2. Relations for routes with tags:
    - `type=route`
    - `route=*` (bus, tram, train, etc. based on GTFS route_type)
    - `name=*` (from GTFS route_long_name)
    - `ref=*` (from GTFS route_short_name)
-   - `gtfs:route_id=*` (original GTFS ID)
+   - `public_transport:version=2`
 
 3. Route master relations for grouping variants of the same route
 
