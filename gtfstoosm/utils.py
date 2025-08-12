@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 import re
+import math
+
 import atlus
 
 
@@ -58,7 +60,7 @@ def format_name(name: str) -> str:
         name: The input name
     """
     # Remove leading and trailing whitespace
-    name = name.strip(" ,;").replace("  ", " ")
+    name = name.strip(" ,;").replace("  ", " ").replace("_", " ")
 
     # Split the text while capturing the separators
     parts = split_compile.split(name)
@@ -84,3 +86,47 @@ def format_name(name: str) -> str:
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
+
+
+def create_bounding_box(
+    latitude: float, longitude: float, distance_meters: float
+) -> list[str]:
+    """
+    Create a bounding box around a coordinate point.
+
+    Given a center coordinate and a distance in meters, this function returns
+    a bounding box where each side extends 'distance_meters' from the center,
+    creating a box with total side length of 2 * distance_meters.
+
+    Args:
+        latitude (float): The latitude of the center point in decimal degrees
+        longitude (float): The longitude of the center point in decimal degrees
+        distance_meters (float): The distance in meters from center to edge
+
+    Returns:
+        list[str]: A tuple containing (min_lat, min_lon, max_lat, max_lon)
+        representing the southwest and northeast corners of the bounding box
+
+    Note:
+        This function uses a simplified calculation that works well for small distances
+        but may become less accurate for very large distances or near the poles.
+    """
+    # Earth's radius in meters
+    EARTH_RADIUS = 6371000.0
+
+    # Convert distance to angular distance in radians
+    # For latitude: 1 degree ≈ 111,111 meters
+    lat_offset = math.degrees(distance_meters / EARTH_RADIUS)
+
+    # For longitude: varies by latitude due to Earth's curvature
+    # At a given latitude, longitude distance = cos(lat) * earth_circumference / 360
+    lat_radians = math.radians(latitude)
+    lon_offset = math.degrees(distance_meters / (EARTH_RADIUS * math.cos(lat_radians)))
+
+    # Calculate bounding box coordinates
+    min_latitude = latitude - lat_offset
+    max_latitude = latitude + lat_offset
+    min_longitude = longitude - lon_offset
+    max_longitude = longitude + lon_offset
+
+    return [str(i) for i in [min_latitude, min_longitude, max_latitude, max_longitude]]

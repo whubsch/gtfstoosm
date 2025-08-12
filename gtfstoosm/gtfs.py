@@ -44,6 +44,8 @@ class GTFSFeed(BaseModel):
             "feed_info.txt",
             "translations.txt",
             "attributions.txt",
+            "timepoint_times.txt",
+            "timepoints.txt",
         ]
     )
 
@@ -59,6 +61,9 @@ class GTFSFeed(BaseModel):
         # Read all files in the feed directory
         with zipfile.ZipFile(self.feed_dir, "r") as zip_ref:
             for file in zip_ref.namelist():
+                if file in self.optional_files:
+                    logger.debug(f"Skipping optional file {file}")
+                    continue
                 table_name = file[:-4]  # Remove the .txt extension
                 try:
                     with zip_ref.open(file) as file_obj:

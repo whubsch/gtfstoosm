@@ -60,7 +60,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--exclude-stops",
         dest="exclude_stops",
-        action="store_false",
+        action="store_true",
         default=False,
         help="Exclude stops from the output",
     )
@@ -68,7 +68,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--exclude-routes",
         dest="exclude_routes",
-        action="store_false",
+        action="store_true",
         default=False,
         help="Exclude routes from the output",
     )

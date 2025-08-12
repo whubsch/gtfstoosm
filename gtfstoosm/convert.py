@@ -14,7 +14,12 @@ import polars as pl
 import random
 
 from gtfstoosm.osm import OSMElement, OSMNode, OSMRelation
-from gtfstoosm.utils import string_to_unique_int, deduplicate_trips, Trip, format_name
+from gtfstoosm.utils import (
+    string_to_unique_int,
+    deduplicate_trips,
+    Trip,
+    format_name,
+)
 from gtfstoosm.gtfs import GTFSFeed
 
 logger = logging.getLogger(__name__)
@@ -124,50 +129,46 @@ class OSMRelationBuilder:
             routes = routes.filter(pl.col("route_type").is_in(self.route_types))
 
         # Only process routes that start with 'P' for now
-        routes_to_process = routes.filter(pl.col("route_id").str.starts_with("M54"))
+        routes_to_process = routes.filter(pl.col("route_id").is_in(["C75", "D74"]))
         # routes_to_process = routes
 
         logger.info(f"Processing {routes_to_process.height} filtered routes")
 
         # Group trips by route_id
-        route_trips_grouped = trips.group_by("route_id", maintain_order=True)
+        # route_trips_grouped = trips.group_by("route_id", maintain_order=True)
 
-        # Process each route
-        for route_id, route_trips in route_trips_grouped:
-            route_ref = str(route_id[0])
+        # Process routes using vectorized operations
+        route_trip_stops = (
+            trips.join(stop_times, on="trip_id")
+            .filter(pl.col("route_id").is_in(routes_to_process["route_id"]))
+            .sort(["route_id", "trip_id", "stop_sequence"])
+            .group_by(["route_id", "trip_id", "shape_id"], maintain_order=True)
+            .agg([pl.col("stop_id").alias("stops")])
+        )
+
+        # Process all routes at once instead of looping
+        for route_data in route_trip_stops.group_by("route_id"):
+            route_ref = str(route_data[0][0])  # route_id
+            route_trips_data = route_data[1]  # DataFrame for this route
 
             try:
-                # Get route information
                 route_info = routes_to_process.filter(
                     pl.col("route_id") == route_ref
                 ).row(0)
                 logger.info(f"Processing route {route_ref}")
-
             except pl.exceptions.OutOfBoundsError:
                 continue
 
-            # Get all trip_ids for this route
-            trip_ids: list[int] = route_trips["trip_id"].to_list()
-
-            # Get all stop sequences for these trips
-            trip_stop_times = stop_times.filter(pl.col("trip_id").is_in(trip_ids))
-
-            # Group stop times by trip_id and sort by stop_sequence
-            trip_sequences = []
-            for route_trip in route_trips.iter_rows(named=True):
-                trip_id = route_trip["trip_id"]
-                trip_stops = trip_stop_times.filter(pl.col("trip_id") == trip_id).sort(
-                    "stop_sequence"
+            # Create Trip objects from the grouped data
+            trip_sequences = [
+                Trip(
+                    trip_id=row["trip_id"],
+                    route_id=route_ref,
+                    shape_id=row["shape_id"],
+                    stops=row["stops"],
                 )
-                stop_ids = trip_stops["stop_id"].to_list()
-                trip_sequences.append(
-                    Trip(
-                        trip_id=trip_id,
-                        route_id=route_ref,
-                        shape_id=route_trip["shape_id"],
-                        stops=stop_ids,
-                    )
-                )
+                for row in route_trips_data.iter_rows(named=True)
+            ]
 
             # Deduplicate stop sets
             trip_sequences = deduplicate_trips(trip_sequences)
@@ -181,7 +182,7 @@ class OSMRelationBuilder:
                         trip_sequence.stops, stops
                     )
                     stop_objects = self._get_stop_objects(
-                        stop_locations, self.add_missing_stops
+                        stop_locations, self.add_missing_stops, 7.5
                     )
 
                 # Get the OSM ways that make up the route
@@ -216,7 +217,7 @@ class OSMRelationBuilder:
                 self.relations.append(relation)
 
     def _get_stop_objects(
-        self, stops: pl.DataFrame, add_missing_stops: bool
+        self, stops: pl.DataFrame, add_missing_stops: bool, max_distance: float = 5
     ) -> list[OSMElement]:
         """
         Get OSM elements for stops by querying nearby bus stops from OpenStreetMap.
@@ -236,7 +237,7 @@ class OSMRelationBuilder:
 
         # Build a single query with all coordinates
         around_clauses = [
-            f"(around:5,{stop_row['lat']},{stop_row['lon']})"
+            f"(around:{max_distance},{stop_row['lat']},{stop_row['lon']})"
             for stop_row in stops.iter_rows(named=True)
         ]
 
@@ -253,7 +254,7 @@ class OSMRelationBuilder:
         (
         {query_body}
         );
-        out geom;
+        out skel;
         """
 
         max_retries = 3
@@ -303,7 +304,7 @@ class OSMRelationBuilder:
                             )
 
                             if (
-                                distance < min_distance and distance <= 5
+                                distance < min_distance and distance <= max_distance
                             ):  # Within 5 meter radius
                                 min_distance = distance
                                 closest_node = osm_node
@@ -315,7 +316,7 @@ class OSMRelationBuilder:
                             all_osm_nodes.remove(closest_node)
                         else:
                             logger.debug(
-                                f"No OSM stop found within 5m of GTFS stop at {stop_lat}, {stop_lon}"
+                                f"No OSM stop found within {max_distance}m of GTFS stop at {stop_lat}, {stop_lon}"
                             )
                             if add_missing_stops:
                                 # Add the stop to the output
@@ -341,16 +342,27 @@ class OSMRelationBuilder:
                     # Success - break out of retry loop
                     break
 
-                elif response.status_code == 429:
+                elif response.status_code in [429, 504]:
                     retry_count += 1
+                    error_base = (
+                        f"Request error by Overpass API (HTTP {response.status_code})."
+                    )
                     if retry_count <= max_retries:
                         logger.warning(
-                            f"Rate limited by Overpass API (HTTP 429). Retrying in 2 seconds... (attempt {retry_count + 1}/{max_retries + 1})"
+                            " ".join(
+                                [
+                                    error_base,
+                                    "Retrying in 2 seconds...",
+                                    f"(attempt {retry_count + 1}/{max_retries + 1})",
+                                ]
+                            )
                         )
                         time.sleep(2)
                     else:
                         logger.error(
-                            f"Rate limited by Overpass API (HTTP 429). Max retries ({max_retries}) exceeded."
+                            " ".join(
+                                [error_base, f"Max retries ({max_retries}) exceeded."]
+                            )
                         )
                         break
                 else:
@@ -363,7 +375,24 @@ class OSMRelationBuilder:
                 logger.warning(f"Error querying nearby stops: {str(e)}")
                 break
 
-        logger.info(f"Found {len(osm_elements)} OSM stop elements (ordered)")
+        # After processing all stops, batch check for duplicates
+        if add_missing_stops:
+            existing_stop_ids = {stop.id for stop in self.new_stops}
+            new_stops_to_add = []
+
+            for element in osm_elements:
+                if element.id < 0 and element.id not in existing_stop_ids:
+                    new_stops_to_add.append(element)
+                    existing_stop_ids.add(
+                        element.id
+                    )  # Prevent duplicates within this batch
+
+            self.new_stops.extend(new_stops_to_add)
+            logger.debug(f"Added {len(new_stops_to_add)} new stops")
+
+        logger.info(
+            f"Found {len([i for i in osm_elements if i.id > 0])} OSM stop elements, created {len([i for i in osm_elements if i.id < 0])} (ordered)"
+        )
         return osm_elements
 
     def _calculate_distance(
@@ -463,21 +492,27 @@ class OSMRelationBuilder:
         valhalla_url = "https://valhalla1.openstreetmap.de/trace_attributes"
 
         request_json = {
-            "shape": [
-                {"lat": lat, "lon": lon}
-                for lat, lon in filtered_shapes.select(
-                    ["shape_pt_lat", "shape_pt_lon"]
-                ).iter_rows()
-            ],
+            "shape": filtered_shapes.select(
+                [
+                    pl.struct(
+                        [
+                            pl.col("shape_pt_lat").alias("lat"),
+                            pl.col("shape_pt_lon").alias("lon"),
+                        ]
+                    )
+                ]
+            )
+            .to_series()
+            .to_list(),
             "costing": costing,
             "costing_options": {
                 "maneuver_penalty": 10,
-                "include_hov2": True,
-                "include_hov3": True,
+                "ignore_access": True,
+                "ignore_restrictions": True,
             },
-            "format": "osrm",
+            "format": "default",
             "shape_match": "map_snap",
-            "filters": {"attributes": ["edge.way_id", "edge.names"]},
+            "filters": {"attributes": ["edge.way_id"]},
         }
 
         # Try the request with retries
@@ -498,8 +533,13 @@ class OSMRelationBuilder:
                     for edge in response.get("edges", []):
                         if "way_id" in edge:
                             way_id = edge["way_id"]
-                            if way_id not in route_ways:
+                            # Prevent repeated way IDs
+                            if not route_ways or way_id != route_ways[-1]:
                                 route_ways.append(way_id)
+
+                    logger.info(
+                        f"Found {len(route_ways)} total ways for route {shape_id} variant"
+                    )
                     return route_ways
                 else:
                     logger.warning(
