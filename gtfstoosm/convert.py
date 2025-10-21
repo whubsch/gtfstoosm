@@ -91,7 +91,7 @@ class OSMRelationBuilder:
                     "type": "route_master",
                     "route_master": "bus",
                     "ref": unique_route["route_id"],
-                    "name": f"WMATA {unique_route['route_id']} "
+                    "name": f"Route {unique_route['route_id']} "
                     + atlus.abbrs(
                         atlus.get_title(
                             unique_route["route_long_name"], single_word=True
@@ -129,8 +129,8 @@ class OSMRelationBuilder:
             routes = routes.filter(pl.col("route_type").is_in(self.route_types))
 
         # Only process routes that start with 'P' for now
-        routes_to_process = routes.filter(pl.col("route_id").is_in(["C75", "D74"]))
-        # routes_to_process = routes
+        # routes_to_process = routes.filter(pl.col("route_id").is_in(["C75", "D74"]))
+        routes_to_process = routes
 
         logger.info(f"Processing {routes_to_process.height} filtered routes")
 
@@ -198,7 +198,7 @@ class OSMRelationBuilder:
                         "public_transport:version": "2",
                         "route": self._get_osm_route_type(route_info[5]),
                         "ref": route_info[2],
-                        "name": f"WMATA {route_info[2]} " + format_name(route_info[3]),
+                        "name": f"Route {route_info[2]} " + format_name(route_info[3]),
                         "colour": "#" + route_info[7],
                     },
                     members=[],
