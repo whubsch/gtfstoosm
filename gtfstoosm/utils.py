@@ -48,6 +48,42 @@ def deduplicate_trips(trips: list[Trip]) -> list[Trip]:
     return unique_trips
 
 
+def calculate_direction(
+    start_coordinate: tuple[float, float], end_coordinate: tuple[float, float]
+) -> str:
+    """
+    Calculate the direction of a route based on its start and end coordinates.
+
+    Args:
+        start_coordinate: Tuple of start latitude and longitude
+        end_coordinate: Tuple of end latitude and longitude
+
+    Returns:
+        String representing the direction of the route
+    """
+    # Convert coordinates to floats
+    start_latitude, start_longitude = (
+        float(start_coordinate[0]),
+        float(start_coordinate[1]),
+    )
+    end_latitude, end_longitude = float(end_coordinate[0]), float(end_coordinate[1])
+
+    lat_diff = end_latitude - start_latitude
+    lon_diff = end_longitude - start_longitude
+
+    # Calculate direction
+    if lat_diff > lon_diff:
+        if start_latitude < end_latitude:
+            return "Northbound"
+        else:
+            return "Soutbound"
+    else:
+        if start_longitude < end_longitude:
+            return "Eastbound"
+        else:
+            return "Westbound"
+
+
 # Use a capturing group to keep the separators in the result
 split_compile = re.compile(r"([/\-–—|\\~])")
 
@@ -130,3 +166,23 @@ def create_bounding_box(
     max_longitude = longitude + lon_offset
 
     return [str(i) for i in [min_latitude, min_longitude, max_latitude, max_longitude]]
+
+
+def parse_tag_string(tag_string: str) -> dict[str, str]:
+    """
+    Parse a semicolon-separated key=value string into a dictionary.
+
+    Args:
+        tag_string: String in format "key1=value1;key2=value2"
+
+    Returns:
+        Dictionary of key-value pairs
+    """
+    result = {}
+    for pair in tag_string.split(";"):
+        pair = pair.strip()
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        result[key.strip()] = value.strip()
+    return result

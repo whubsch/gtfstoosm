@@ -4,7 +4,7 @@ This guide explains how to use the GTFS to OSM converter to transform public tra
 
 ## Basic Usage
 
-The converter can be used either as a command-line tool or as a Python library.
+The converter can be used as a Python library.
 
 ### Command-Line Interface
 
@@ -21,12 +21,34 @@ python -m gtfstoosm.cli --input /path/to/gtfs.zip --output output.osc
 
 ### Optional Arguments
 
-- `--exclude-stops`: Exclude stops from the output
-- `--exclude-routes`: Exclude routes from the output
-- `--add-missing-stops`: Add missing stops to the output
-- `--route-types`: Only include routes with specific GTFS route_type values (space-separated)
-- `--agency`: Only include routes for a specific agency ID
-- `--verbose`, `-v`: Enable verbose logging for debugging
+#### Output Control
+
+- `--exclude-stops`: Exclude stops from the output (default: False)
+- `--exclude-routes`: Exclude routes from the output (default: False)
+- `--add-missing-stops`: Add stops that are missing from the OSM database to the output (default: False)
+  - Note: Cannot be used with `--exclude-stops`
+
+#### Route Filtering
+
+- `--route-ref-pattern`: Regex pattern to filter routes by their `route_id`. This allows you to process only specific routes that match the pattern
+  - Example: `"^[0-9]+$"` - Only numeric route IDs
+  - Example: `"^C"` - Only routes starting with 'C'
+  - Example: `"^(10|20|30)$"` - Only routes 10, 20, or 30
+
+#### Stop Matching
+
+- `--stop-search-radius`: Radius in meters to search for existing OSM stops (default: 10.0)
+  - Decrease for more precise matching in dense areas
+  - Any value above 10 meters will be ignored because it will take too long to search
+
+#### Route Options
+
+- `--add-route-direction`: Add route direction information to the output (default: False)
+  - Adds directional tags to help distinguish route variants
+
+#### Logging
+
+- `--verbose`, `-v`: Enable verbose (DEBUG level) logging for troubleshooting
 
 ## Examples
 
@@ -36,14 +58,6 @@ Convert an entire GTFS feed to OSM:
 
 ```bash
 python -m gtfstoosm.cli -i transit_agency.zip -o transit_routes.osc
-```
-
-### Converting Only Specific Route Types
-
-Convert only tram (0), subway (1), and rail (2) routes:
-
-```bash
-python -m gtfstoosm.cli -i transit_agency.zip -o transit_rail.osm --route-types 0 1 2
 ```
 
 ### Converting Only Routes for a Specific Agency
@@ -62,16 +76,19 @@ You can also use the converter as a Python library in your own code:
 from gtfstoosm.convert import convert_gtfs_to_osm
 
 # Basic conversion
-convert_gtfs_to_osm('path/to/gtfs.zip', 'output.osm')
+convert_gtfs_to_osm('path/to/gtfs.zip', 'output.osc')
 
 # Conversion with options
-options = {
-    'include_stops': True,
-    'include_routes': True,
-    'route_types': [0, 1, 2],  # Only tram, subway, rail
-    'agency_id': 'AGENCY1'
-}
-convert_gtfs_to_osm('path/to/gtfs.zip', 'output.osm', **options)
+convert_gtfs_to_osm(
+    input_feed='path/to/gtfs.zip',
+    output_file='output.osc',
+    exclude_stops=False,
+    exclude_routes=False,
+    add_missing_stops=True,
+    stop_search_radius=5.0,
+    add_route_direction=True,
+    route_ref_pattern='^[0-9]+$'
+)
 ```
 
 ## Output Format
@@ -87,7 +104,7 @@ The converter generates standard OSM XML files containing:
    - `type=route`
    - `route=*` (bus, tram, train, etc. based on GTFS route_type)
    - `name=*` (from GTFS route_long_name)
-   - `ref=*` (from GTFS route_short_name)
+   - `ref=*` (from GTFS route_id)
    - `public_transport:version=2`
 
 3. Route master relations for grouping variants of the same route

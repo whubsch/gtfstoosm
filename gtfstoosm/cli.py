@@ -11,6 +11,7 @@ import argparse
 import logging
 
 from gtfstoosm.convert import convert_gtfs_to_osm
+from gtfstoosm.utils import parse_tag_string
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -81,19 +82,49 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Add stops missing from the database to the output (default: False)",
     )
 
+    # parser.add_argument(
+    #     "--route-types",
+    #     dest="route_types",
+    #     type=int,
+    #     nargs="+",
+    #     help="Only include routes with these GTFS route_type values (space-separated). Only bus routes are currently supported.",
+    # )
+
+    # parser.add_argument(
+    #     "--agency",
+    #     dest="agency_id",
+    #     type=str,
+    #     help="Only include routes for this agency ID",
+    # )
+
     parser.add_argument(
-        "--route-types",
-        dest="route_types",
-        type=int,
-        nargs="+",
-        help="Only include routes with these GTFS route_type values (space-separated)",
+        "--stop-search-radius",
+        dest="stop_search_radius",
+        type=float,
+        default=10.0,
+        help="Radius to search for stops (in meters)",
     )
 
     parser.add_argument(
-        "--agency",
-        dest="agency_id",
+        "--add-route-direction",
+        dest="add_route_direction",
+        action="store_true",
+        default=False,
+        help="Add route direction to the output (default: False)",
+    )
+
+    parser.add_argument(
+        "--route-ref-pattern",
+        dest="route_ref_pattern",
         type=str,
-        help="Only include routes for this agency ID",
+        help="Regex pattern to filter routes by route_id (e.g., '^[0-9]+$' for numeric routes only)",
+    )
+
+    parser.add_agument(
+        "--relation-tags",
+        dest="relation_tags",
+        type=str,
+        help="Semicolon-separated list of tags to add to the route and route_master relations (e.g., 'operator=TransitCenter;network=Whoville Bus;network:wikidata=Q123')",
     )
 
     parser.add_argument(
@@ -138,6 +169,14 @@ def main(args: list[str] | None = None) -> int:
             logger.error("Nothing to convert")
             return 1
 
+        if parsed_args.stop_search_radius < 0:
+            logger.error("Stop search radius must be a positive number")
+            return 1
+
+        if parsed_args.stop_search_radius > 10:
+            logger.warning("Stop search radius is too large, reverting to 10 meters")
+            parsed_args.stop_search_radius = 10
+
         # Validate output directory
         output_dir = os.path.dirname(parsed_args.output_file)
         if output_dir and not os.path.exists(output_dir):
@@ -149,8 +188,12 @@ def main(args: list[str] | None = None) -> int:
             "exclude_stops": parsed_args.exclude_stops,
             "exclude_routes": parsed_args.exclude_routes,
             "add_missing_stops": parsed_args.add_missing_stops,
-            "route_types": parsed_args.route_types,
-            "agency_id": parsed_args.agency_id,
+            "stop_search_radius": parsed_args.stop_search_radius,
+            "add_route_direction": parsed_args.add_route_direction,
+            "route_ref_pattern": parsed_args.route_ref_pattern,
+            "relation_tags": parse_tag_string(parsed_args.relation_tags),
+            # "route_types": parsed_args.route_types,
+            # "agency_id": parsed_args.agency_id,
         }
 
         logger.debug(f"CLI options: {options}")

@@ -61,11 +61,12 @@ class GTFSFeed(BaseModel):
         # Read all files in the feed directory
         with zipfile.ZipFile(self.feed_dir, "r") as zip_ref:
             for file in zip_ref.namelist():
-                if file in self.optional_files:
+                if file not in self.required_files:
                     logger.debug(f"Skipping optional file {file}")
                     continue
                 table_name = file[:-4]  # Remove the .txt extension
                 try:
+                    logger.debug(f"Loading {file}")
                     with zip_ref.open(file) as file_obj:
                         # Read the CSV data into a polars DataFrame
                         df = pl.read_csv(

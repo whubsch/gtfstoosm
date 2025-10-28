@@ -40,7 +40,7 @@ This project provides tools to transform public transit data from the GTFS forma
 Basic usage example:
 
 ```bash
-python -m gtfstoosm.convert --input path/to/gtfs/feed.zip --output output.osc
+python -m gtfstoosm.cli --input path/to/gtfs/feed.zip --output output.osc
 ```
 
 For more detailed instructions and options, see the [Documentation](docs/usage.md).
@@ -54,7 +54,8 @@ gtfstoosm/
 │   ├── convert.py      # Core conversion logic
 │   ├── gtfs.py         # GTFS data handling
 │   ├── osm.py          # OSM output generation
-│   └── utils.py        # Utility functions
+│   ├── utils.py        # Utility functions
+│   └── cli.py          # Command-line interface
 ├── docs/               # Documentation
 ├── requirements.txt    # Python dependencies
 └── LICENSE             # MIT License

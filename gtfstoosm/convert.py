@@ -9,7 +9,6 @@ import logging
 from typing import Any
 import requests
 import time
-import atlus
 import polars as pl
 import random
 
@@ -19,6 +18,7 @@ from gtfstoosm.utils import (
     deduplicate_trips,
     Trip,
     format_name,
+    calculate_direction,
 )
 from gtfstoosm.gtfs import GTFSFeed
 
@@ -35,16 +35,13 @@ class OSMRelationBuilder:
         add_missing_stops: bool = False,
         route_types: list[int] | None = None,
         agency_id: str | None = None,
+        search_radius: float = 10.0,
+        route_direction: bool = False,
+        route_ref_pattern: str | None = None,
+        relation_tags: dict[str, str] | None = None,
     ):
         """
         Initialize the OSM relation builder.
-
-        Args:
-            exclude_stops: Whether to include stops in the output
-            exclude_routes: Whether to include routes in the output
-            add_missing_stops: Whether to add stops missing from the database to the output
-            route_types: List of route types to include (GTFS route_type values)
-            agency_id: Only include routes for this agency
         """
         self.exclude_stops = exclude_stops
         self.exclude_routes = exclude_routes
@@ -54,9 +51,26 @@ class OSMRelationBuilder:
         self.relations: list[OSMRelation] = []
         self.nodes: list[OSMNode] = []
         self.new_stops: list[OSMNode] = []
+        self.search_radius = search_radius
+        self.route_direction = route_direction
+        self.route_ref_pattern = route_ref_pattern
+        self.relation_tags = relation_tags
 
     def __str__(self) -> str:
-        return f"OSMRelationBuilder(exclude_stops={self.exclude_stops}, exclude_routes={self.exclude_routes}, add_missing_stops={self.add_missing_stops}, route_types={self.route_types}, agency_id={self.agency_id})"
+        # Exclude None values and internal collections
+        exclude_attrs = {"relations", "nodes", "new_stops"}
+        attrs = [
+            f"{k}={v!r}"
+            for k, v in vars(self).items()
+            if v is not None and not k.startswith("_") and k not in exclude_attrs
+        ]
+        return f"OSMRelationBuilder({', '.join(attrs)})"
+
+    def __repr__(self) -> str:
+        attrs = {k: v for k, v in vars(self).items()}
+        return (
+            f"OSMRelationBuilder({', '.join(f'{k}={v!r}' for k, v in attrs.items())})"
+        )
 
     def build_relations(self, gtfs_data: dict[str, pl.DataFrame]) -> None:
         """
@@ -85,20 +99,21 @@ class OSMRelationBuilder:
         )
 
         for unique_route in unique_routes.iter_rows(named=True):
+            route_master_tags = {
+                "type": "route_master",
+                "route_master": "bus",
+                "ref": unique_route["route_id"],
+                "name": f"Route {unique_route['route_id']} {unique_route['route_long_name']}".strip(),
+            }
+            if "route_color" in unique_route:
+                route_master_tags["route_color"] = "#" + unique_route["route_color"]
+
+            if self.relation_tags:
+                route_master_tags.update(self.relation_tags)
+
             master = OSMRelation(
                 id=-1 * random.randint(1, 10**6),
-                tags={
-                    "type": "route_master",
-                    "route_master": "bus",
-                    "ref": unique_route["route_id"],
-                    "name": f"Route {unique_route['route_id']} "
-                    + atlus.abbrs(
-                        atlus.get_title(
-                            unique_route["route_long_name"], single_word=True
-                        )
-                    ),
-                    "colour": "#" + unique_route["route_color"],
-                },
+                tags=route_master_tags,
             )
             for route in self.relations:
                 if route.tags.get("ref") == unique_route["route_id"]:
@@ -128,14 +143,18 @@ class OSMRelationBuilder:
         if self.route_types:
             routes = routes.filter(pl.col("route_type").is_in(self.route_types))
 
-        # Only process routes that start with 'P' for now
-        # routes_to_process = routes.filter(pl.col("route_id").is_in(["C75", "D74"]))
-        routes_to_process = routes
+        # Filter routes by regex pattern if specified
+        if self.route_ref_pattern is not None:
+            routes_to_process = routes.filter(
+                pl.col("route_id").cast(pl.Utf8).str.contains(self.route_ref_pattern)
+            )
+            logger.debug(
+                f"Filtered to routes matching pattern '{self.route_ref_pattern}'"
+            )
+        else:
+            routes_to_process = routes
 
         logger.info(f"Processing {routes_to_process.height} filtered routes")
-
-        # Group trips by route_id
-        # route_trips_grouped = trips.group_by("route_id", maintain_order=True)
 
         # Process routes using vectorized operations
         route_trip_stops = (
@@ -176,13 +195,11 @@ class OSMRelationBuilder:
             # Process each unique stop pattern
             for trip_sequence in trip_sequences:
                 # Get the stop locations (with lat and long)
+                stop_locations = self._get_stop_locations(trip_sequence.stops, stops)
                 stop_objects = []
                 if not self.exclude_stops:
-                    stop_locations = self._get_stop_locations(
-                        trip_sequence.stops, stops
-                    )
                     stop_objects = self._get_stop_objects(
-                        stop_locations, self.add_missing_stops, 7.5
+                        stop_locations, self.add_missing_stops, self.search_radius
                     )
 
                 # Get the OSM ways that make up the route
@@ -190,17 +207,30 @@ class OSMRelationBuilder:
                 if not self.exclude_routes:
                     osm_way_ids = self._get_route_ways(trip_sequence.shape_id, shapes)
 
+                # Calculate direction
+                direction = ""
+                if self.route_direction:
+                    first_stop = stop_locations.head(1).select(["lat", "lon"]).row(0)
+                    last_stop = stop_locations.tail(1).select(["lat", "lon"]).row(0)
+                    direction = calculate_direction(first_stop, last_stop)
+
+                route_tags = {
+                    "type": "route",
+                    "public_transport:version": "2",
+                    "route": self._get_osm_route_type(route_info[5]),
+                    "ref": route_info[2],
+                    "name": f"Route {route_info[2]} {format_name(route_info[3])} {direction}".strip(),
+                }
+                if route_info[7]:
+                    route_tags["colour"] = "#" + route_info[7]
+
+                if self.relation_tags:
+                    route_tags.update(self.relation_tags)
+
                 # Create OSM relation
                 relation = OSMRelation(
                     id=-1 * random.randint(1, string_to_unique_int(route_ref)),
-                    tags={
-                        "type": "route",
-                        "public_transport:version": "2",
-                        "route": self._get_osm_route_type(route_info[5]),
-                        "ref": route_info[2],
-                        "name": f"Route {route_info[2]} " + format_name(route_info[3]),
-                        "colour": "#" + route_info[7],
-                    },
+                    tags=route_tags,
                     members=[],
                 )
 
@@ -233,7 +263,8 @@ class OSMRelationBuilder:
             return []
 
         osm_elements = []
-        overpass_url = "https://overpass-api.de/api/interpreter"
+        # overpass_url = "https://overpass-api.de/api/interpreter"
+        overpass_url = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 
         # Build a single query with all coordinates
         around_clauses = [
@@ -277,7 +308,7 @@ class OSMRelationBuilder:
                     result = response.json()
 
                     # Create OSMNode objects from all results
-                    all_osm_nodes = []
+                    all_osm_nodes: list[OSMNode] = []
                     for element in result.get("elements", []):
                         if element["type"] == "node":
                             osm_node = OSMNode(
@@ -666,7 +697,7 @@ class OSMRelationBuilder:
             raise OSError(f"Failed to write OSM file: {str(e)}")
 
 
-def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options) -> bool:
+def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options: dict) -> bool:
     """
     Convert a GTFS feed to OSM relations.
 
@@ -677,8 +708,10 @@ def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options) -> bool:
             - exclude_stops: Whether to include stops (default: False)
             - exclude_routes: Whether to include routes (default: False)
             - add_missing_stops: Whether to add stops missing from the database to the output (default: False)
-            - route_types: List of route types to include (default: None = all)
-            - agency_id: Only include routes for this agency (default: None = all)
+            - stop_search_radius: Radius in meters to search for stops (default: 10)
+            - add_route_direction: Whether to add route direction to the output (default: False)
+            - route_ref_pattern: Regex pattern to filter routes by (default: None)
+            - relation_tags: Dict of tags to add to the route and route_master relations (default: None)
 
     Returns:
         True if conversion was successful
@@ -704,8 +737,12 @@ def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options) -> bool:
             exclude_stops=options.get("exclude_stops", False),
             exclude_routes=options.get("exclude_routes", False),
             add_missing_stops=options.get("add_missing_stops", False),
-            route_types=options.get("route_types"),
-            agency_id=options.get("agency_id"),
+            # route_types=options.get("route_types"),
+            # agency_id=options.get("agency_id"),
+            search_radius=options.get("stop_search_radius", 10.0),
+            route_direction=options.get("route_direction", False),
+            route_ref_pattern=options.get("route_ref_pattern"),
+            relation_tags=options.get("relation_tags"),
         )
 
         logger.debug(f"OSMRelationBuilder options: {builder}")
