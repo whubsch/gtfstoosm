@@ -5,11 +5,12 @@ This module provides functionality for parsing and processing GTFS data.
 It handles the reading and validation of GTFS feeds.
 """
 
-import polars as pl
 import logging
 import re
-from io import BytesIO
 import zipfile
+from io import BytesIO
+
+import polars as pl
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)

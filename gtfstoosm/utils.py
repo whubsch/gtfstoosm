@@ -1,8 +1,8 @@
-from pydantic import BaseModel
-import re
 import math
+import re
 
 import atlus
+from pydantic import BaseModel
 
 
 class Trip(BaseModel):

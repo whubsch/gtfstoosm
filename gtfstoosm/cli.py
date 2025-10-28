@@ -1,14 +1,13 @@
-#!/usr/bin/env python3
 """
 Command-line interface for the GTFS to OSM converter.
 
 This module provides a CLI for converting GTFS feeds to OSM relations.
 """
 
-import sys
-import os
 import argparse
 import logging
+import os
+import sys
 
 from gtfstoosm.convert import convert_gtfs_to_osm
 from gtfstoosm.utils import parse_tag_string
@@ -120,7 +119,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Regex pattern to filter routes by route_id (e.g., '^[0-9]+$' for numeric routes only)",
     )
 
-    parser.add_agument(
+    parser.add_argument(
         "--relation-tags",
         dest="relation_tags",
         type=str,

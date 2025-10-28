@@ -6,21 +6,22 @@ converting it to OSM relations that can be imported into OpenStreetMap.
 """
 
 import logging
-from typing import Any
-import requests
-import time
-import polars as pl
 import random
+import time
+from typing import Any
 
+import polars as pl
+import requests
+
+from gtfstoosm.gtfs import GTFSFeed
 from gtfstoosm.osm import OSMElement, OSMNode, OSMRelation
 from gtfstoosm.utils import (
-    string_to_unique_int,
-    deduplicate_trips,
     Trip,
-    format_name,
     calculate_direction,
+    deduplicate_trips,
+    format_name,
+    string_to_unique_int,
 )
-from gtfstoosm.gtfs import GTFSFeed
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ class OSMRelationBuilder:
         return f"OSMRelationBuilder({', '.join(attrs)})"
 
     def __repr__(self) -> str:
-        attrs = {k: v for k, v in vars(self).items()}
+        attrs = dict(vars(self).items())
         return (
             f"OSMRelationBuilder({', '.join(f'{k}={v!r}' for k, v in attrs.items())})"
         )
@@ -93,7 +94,7 @@ class OSMRelationBuilder:
         """
         logger.info("Creating route_master relations")
 
-        made_routes = set(variant.tags["ref"] for variant in self.relations)
+        made_routes = {variant.tags["ref"] for variant in self.relations}
         unique_routes = gtfs_data["routes"].filter(
             pl.col("route_id").is_in(made_routes)
         )
