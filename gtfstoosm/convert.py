@@ -8,7 +8,6 @@ converting it to OSM relations that can be imported into OpenStreetMap.
 import logging
 import random
 import time
-from typing import Any
 
 import polars as pl
 import requests
@@ -222,8 +221,8 @@ class OSMRelationBuilder:
                     "ref": route_info[2],
                     "name": f"Route {route_info[2]} {format_name(route_info[3])} {direction}".strip(),
                 }
-                if route_info[7]:
-                    route_tags["colour"] = "#" + route_info[7]
+                if route_info[7] and len(route_info[7].strip("#")) in (3, 6):
+                    route_tags["colour"] = "#" + route_info[7].strip("#")
 
                 if self.relation_tags:
                     route_tags.update(self.relation_tags)
@@ -630,28 +629,6 @@ class OSMRelationBuilder:
 
         return route_type_map.get(route_type, "bus")
 
-    def _get_network_name(
-        self, route: dict[str, Any], agencies: list[dict[str, Any]]
-    ) -> str:
-        """
-        Get the network name for a route.
-
-        Args:
-            route: GTFS route dictionary
-            agencies: List of GTFS agency dictionaries
-
-        Returns:
-            Network name for OSM
-        """
-        agency_id = route.get("agency_id")
-        if agency_id and agencies:
-            for agency in agencies:
-                if agency.get("agency_id") == agency_id:
-                    return agency.get("agency_name", "")
-
-        # Default if no agency found
-        return ""
-
     def is_stop_duplicate(self, new_stop):
         """Check if a stop is already in self.new_stops."""
         for existing_stop in self.new_stops:
@@ -695,7 +672,7 @@ class OSMRelationBuilder:
 
         except Exception as e:
             logger.error(f"Error writing OSM file: {str(e)}")
-            raise OSError(f"Failed to write OSM file: {str(e)}")
+            raise OSError(f"Failed to write OSM file: {str(e)}") from e
 
 
 def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options: dict) -> bool:

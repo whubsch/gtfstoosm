@@ -190,7 +190,9 @@ def main(args: list[str] | None = None) -> int:
             "stop_search_radius": parsed_args.stop_search_radius,
             "add_route_direction": parsed_args.add_route_direction,
             "route_ref_pattern": parsed_args.route_ref_pattern,
-            "relation_tags": parse_tag_string(parsed_args.relation_tags),
+            "relation_tags": parse_tag_string(parsed_args.relation_tags)
+            if parsed_args.relation_tags
+            else None,
             # "route_types": parsed_args.route_types,
             # "agency_id": parsed_args.agency_id,
         }

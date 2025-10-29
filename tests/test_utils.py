@@ -1,11 +1,8 @@
 """Tests for utility functions."""
 
-import pytest
-
 from gtfstoosm.utils import (
     Trip,
     calculate_direction,
-    create_bounding_box,
     deduplicate_trips,
     format_name,
     parse_tag_string,
@@ -106,11 +103,10 @@ class TestCalculateDirection:
         assert calculate_direction(start, end) == "Northbound"
 
     def test_southbound(self):
-        """Test southbound direction calculation (note: typo in source code)."""
+        """Test southbound direction calculation."""
         start = (41.0, -74.0)
         end = (40.0, -74.0)
-        # Note: Source has typo "Soutbound"
-        assert calculate_direction(start, end) == "Soutbound"
+        assert calculate_direction(start, end) == "Southbound"
 
     def test_eastbound(self):
         """Test eastbound direction calculation."""
@@ -136,7 +132,7 @@ class TestFormatName:
 
     def test_basic_formatting(self):
         """Test basic name formatting."""
-        assert "Street" in format_name("main street")
+        assert "Road" in format_name("main rd")
 
     def test_strip_whitespace(self):
         """Test stripping leading/trailing whitespace."""
@@ -178,59 +174,6 @@ class TestFormatName:
         """Test with empty string."""
         result = format_name("")
         assert result == ""
-
-
-class TestCreateBoundingBox:
-    """Tests for create_bounding_box function."""
-
-    def test_creates_four_coordinates(self):
-        """Test that function returns four coordinates."""
-        result = create_bounding_box(40.7128, -74.0060, 100)
-        assert len(result) == 4
-
-    def test_returns_strings(self):
-        """Test that all values are strings."""
-        result = create_bounding_box(40.7128, -74.0060, 100)
-        assert all(isinstance(x, str) for x in result)
-
-    def test_min_less_than_max(self):
-        """Test that min values are less than max values."""
-        result = create_bounding_box(40.7128, -74.0060, 100)
-        min_lat, min_lon, max_lat, max_lon = [float(x) for x in result]
-        assert min_lat < max_lat
-        assert min_lon < max_lon
-
-    def test_center_within_box(self):
-        """Test that center point is within the bounding box."""
-        lat, lon = 40.7128, -74.0060
-        result = create_bounding_box(lat, lon, 100)
-        min_lat, min_lon, max_lat, max_lon = [float(x) for x in result]
-        assert min_lat < lat < max_lat
-        assert min_lon < lon < max_lon
-
-    def test_zero_distance(self):
-        """Test with zero distance."""
-        lat, lon = 40.7128, -74.0060
-        result = create_bounding_box(lat, lon, 0)
-        min_lat, min_lon, max_lat, max_lon = [float(x) for x in result]
-        # Should be approximately equal (within floating point precision)
-        assert abs(float(min_lat) - lat) < 1e-10
-        assert abs(float(max_lat) - lat) < 1e-10
-
-    def test_equator(self):
-        """Test at the equator where longitude calculation is simplest."""
-        result = create_bounding_box(0.0, 0.0, 1000)
-        assert len(result) == 4
-
-    def test_positive_distance_only(self):
-        """Test that distance creates expansion, not contraction."""
-        lat, lon = 40.7128, -74.0060
-        result = create_bounding_box(lat, lon, 100)
-        min_lat, min_lon, max_lat, max_lon = [float(x) for x in result]
-
-        # Box should be larger than a point
-        assert max_lat - min_lat > 0
-        assert max_lon - min_lon > 0
 
 
 class TestParseTagString:
