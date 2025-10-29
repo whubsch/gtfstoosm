@@ -37,8 +37,8 @@ def deduplicate_trips(trips: list[Trip]) -> list[Trip]:
     Returns:
         List of unique Trip objects (first occurrence kept for each unique stops sequence)
     """
-    seen_stops = set()
-    unique_trips = []
+    seen_stops: set[tuple[str | int, ...]] = set()
+    unique_trips: list[Trip] = []
 
     for trip in trips:
         # Convert stops list to tuple for hashing
@@ -105,7 +105,7 @@ def format_name(name: str) -> str:
     # Split the text while capturing the separators
     parts = split_compile.split(name)
 
-    processed_parts = []
+    processed_parts: list[str] = []
 
     for i, part in enumerate(parts):
         # If this is a separator (which will be at odd indices after the split)
@@ -138,7 +138,7 @@ def parse_tag_string(tag_string: str) -> dict[str, str]:
     Returns:
         Dictionary of key-value pairs
     """
-    result = {}
+    result: dict[str, str] = {}
     for pair in tag_string.split(";"):
         pair = pair.strip()
         if "=" not in pair:

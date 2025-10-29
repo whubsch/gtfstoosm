@@ -43,18 +43,18 @@ class OSMRelationBuilder:
         """
         Initialize the OSM relation builder.
         """
-        self.exclude_stops = exclude_stops
-        self.exclude_routes = exclude_routes
-        self.add_missing_stops = add_missing_stops
-        self.route_types = route_types
-        self.agency_id = agency_id
+        self.exclude_stops: bool = exclude_stops
+        self.exclude_routes: bool = exclude_routes
+        self.add_missing_stops: bool = add_missing_stops
+        self.route_types: list[int] | None = route_types
+        self.agency_id: str | None = agency_id
         self.relations: list[OSMRelation] = []
         self.nodes: list[OSMNode] = []
         self.new_stops: list[OSMNode] = []
-        self.search_radius = search_radius
-        self.route_direction = route_direction
-        self.route_ref_pattern = route_ref_pattern
-        self.relation_tags = relation_tags
+        self.search_radius: float = search_radius
+        self.route_direction: bool = route_direction
+        self.route_ref_pattern: str | None = route_ref_pattern
+        self.relation_tags: dict[str, str] | None = relation_tags
 
     def __str__(self) -> str:
         # Exclude None values and internal collections
@@ -172,7 +172,7 @@ class OSMRelationBuilder:
 
             try:
                 route_info = routes_to_process.filter(
-                    pl.col("route_id") == route_ref
+                    pl.col("route_id").cast(pl.Utf8) == route_ref
                 ).row(0)
                 logger.info(f"Processing route {route_ref}")
             except pl.exceptions.OutOfBoundsError:
@@ -262,7 +262,7 @@ class OSMRelationBuilder:
         if stops.is_empty():
             return []
 
-        osm_elements = []
+        osm_elements: list[OSMElement] = []
         # overpass_url = "https://overpass-api.de/api/interpreter"
         overpass_url = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 
@@ -629,7 +629,7 @@ class OSMRelationBuilder:
 
         return route_type_map.get(route_type, "bus")
 
-    def is_stop_duplicate(self, new_stop):
+    def is_stop_duplicate(self, new_stop: OSMNode) -> bool:
         """Check if a stop is already in self.new_stops."""
         for existing_stop in self.new_stops:
             # Check if ID matches
@@ -675,7 +675,9 @@ class OSMRelationBuilder:
             raise OSError(f"Failed to write OSM file: {str(e)}") from e
 
 
-def convert_gtfs_to_osm(gtfs_path: str, osm_path: str, **options: dict) -> bool:
+def convert_gtfs_to_osm(
+    gtfs_path: str, osm_path: str, **options: dict[str, bool | int | str]
+) -> bool:
     """
     Convert a GTFS feed to OSM relations.
 

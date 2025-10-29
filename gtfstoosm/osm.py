@@ -15,14 +15,14 @@ class OSMElement(BaseModel):
         """Add a tag to the element."""
         if key in self.tags:
             raise ValueError(f"Key {key} already exists with value: {value}")
-        if value is not None and value != "":
+        if value and value != "":
             self.tags[key] = value
 
     def modify_tag(self, key: str, value: str) -> None:
         """Modify a tag in the element."""
         if key not in self.tags:
             raise ValueError(f"Key {key} does not yet exist")
-        if value is not None and value != "":
+        if value and value != "":
             self.tags[key] = value
 
     def tags_to_xml(self) -> str:
