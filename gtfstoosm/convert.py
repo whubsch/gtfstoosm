@@ -111,6 +111,10 @@ class OSMRelationBuilder:
             if self.relation_tags:
                 route_master_tags.update(self.relation_tags)
 
+            route_master_tags = {
+                str(k): str(v) for k, v in route_master_tags.items() if v is not None
+            }
+
             master = OSMRelation(
                 id=-1 * random.randint(1, 10**6),
                 tags=route_master_tags,
@@ -227,6 +231,10 @@ class OSMRelationBuilder:
                 if self.relation_tags:
                     route_tags.update(self.relation_tags)
 
+                route_tags = {
+                    str(k): str(v) for k, v in route_tags.items() if v is not None
+                }
+
                 # Create OSM relation
                 relation = OSMRelation(
                     id=-1 * random.randint(1, string_to_unique_int(route_ref)),
@@ -311,11 +319,22 @@ class OSMRelationBuilder:
                     all_osm_nodes: list[OSMNode] = []
                     for element in result.get("elements", []):
                         if element["type"] == "node":
+                            node_id = element.get("id")
+                            if not node_id:
+                                continue
+
+                            # Forces tags to be strings
+                            node_tags = {
+                                str(k): str(v)
+                                for k, v in element.get("tags", {}).items()
+                                if v is not None
+                            }
+
                             osm_node = OSMNode(
-                                id=element["id"],
+                                id=int(node_id),
                                 lat=element["lat"],
                                 lon=element["lon"],
-                                tags=element.get("tags", {}),
+                                tags=node_tags,
                             )
                             all_osm_nodes.append(osm_node)
 
@@ -352,7 +371,7 @@ class OSMRelationBuilder:
                             if add_missing_stops:
                                 # Add the stop to the output
                                 new_stop = OSMNode(
-                                    id=-1 * stop_row["stop_id"],
+                                    id=-1 * string_to_unique_int(str(stop_row["stop_id"])),
                                     lat=stop_lat,
                                     lon=stop_lon,
                                     tags={
