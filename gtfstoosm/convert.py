@@ -720,7 +720,9 @@ def convert_gtfs_to_osm(
             # route_types=options.get("route_types"),
             # agency_id=options.get("agency_id"),
             search_radius=options.get("stop_search_radius", 10.0),
-            route_direction=options.get("route_direction", False),
+            route_direction=options.get(
+                "add_route_direction", options.get("route_direction", False)
+            ),
             route_ref_pattern=options.get("route_ref_pattern"),
             relation_tags=options.get("relation_tags"),
         )
