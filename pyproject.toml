@@ -48,3 +48,6 @@ ignore = [
 dev = [
     "nox>=2025.11.12",
 ]
+
+[tool.setuptools.packages.find]
+include = ["gtfstoosm*"]

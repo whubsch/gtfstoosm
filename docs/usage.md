@@ -60,12 +60,20 @@ Convert an entire GTFS feed to OSM:
 python -m gtfstoosm.cli -i transit_agency.zip -o transit_routes.osc
 ```
 
-### Converting Only Routes for a Specific Agency
+### Converting Only Some Routes
 
-If your GTFS feed contains data from multiple agencies:
+Only the routes whose `route_id` matches a regular expression, tagged with their network:
 
 ```bash
-python -m gtfstoosm.cli -i regional_transit.zip -o city_bus.osm --agency CITYBUS
+python -m gtfstoosm.cli -i regional_transit.zip -o city_bus.osc     --route-ref-pattern '^(10|20|30)$'     --relation-tags 'network=City Bus;operator=City Transit'
+```
+
+### With Docker
+
+The feed and the result live in the `data` folder (see the README):
+
+```bash
+docker compose run --rm convert -i /data/transit_agency.zip -o /data/transit_routes.osc
 ```
 
 ## Python API Usage
@@ -80,8 +88,8 @@ convert_gtfs_to_osm('path/to/gtfs.zip', 'output.osc')
 
 # Conversion with options
 convert_gtfs_to_osm(
-    input_feed='path/to/gtfs.zip',
-    output_file='output.osc',
+    'path/to/gtfs.zip',  # gtfs_path
+    'output.osc',  # osm_path
     exclude_stops=False,
     exclude_routes=False,
     add_missing_stops=True,
@@ -95,7 +103,7 @@ convert_gtfs_to_osm(
 
 The converter generates standard OSM XML files containing:
 
-1. Nodes for transit stops with appropriate tags:
+1. Nodes for the transit stops that are not found in OSM (only with `--add-missing-stops`), with tags:
    - `public_transport=platform`
    - `highway=bus_stop`
    - `name=*` (from GTFS stop_name)
@@ -103,8 +111,8 @@ The converter generates standard OSM XML files containing:
 2. Relations for routes with tags:
    - `type=route`
    - `route=*` (bus, tram, train, etc. based on GTFS route_type)
-   - `name=*` (from GTFS route_long_name)
-   - `ref=*` (from GTFS route_id)
+   - `name=*` (built from GTFS route_short_name and route_long_name)
+   - `ref=*` (from GTFS route_short_name)
    - `public_transport:version=2`
 
 3. Route master relations for grouping variants of the same route
@@ -125,7 +133,7 @@ Always follow the [OSM Import Guidelines](https://wiki.openstreetmap.org/wiki/Im
 
 1. **Invalid GTFS feed**: Ensure your GTFS feed is valid by checking it with a GTFS validator
 2. **Missing required files**: The GTFS feed must contain at least the required files (stops.txt, routes.txt, trips.txt, stop_times.txt)
-3. **Memory issues with large feeds**: For very large GTFS feeds, try filtering by agency or route type
+3. **Memory issues with large feeds**: For very large GTFS feeds, convert fewer routes at once with `--route-ref-pattern`
 
 ### Logging
 

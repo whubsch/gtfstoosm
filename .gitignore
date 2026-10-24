@@ -142,3 +142,6 @@ dmypy.json
 .vscode/
 *.swp
 *.swo
+
+# local GTFS feeds and OSM extracts for the Docker workflow
+/data/

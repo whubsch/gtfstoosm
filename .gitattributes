@@ -1,0 +1,2 @@
+# The wrapper runs in Linux containers: keep LF line endings even on Windows checkouts
+docker/gtfstoosm text eol=lf

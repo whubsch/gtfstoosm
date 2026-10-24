@@ -1,0 +1,55 @@
+# Everything runs in containers, nothing needs to be installed on the host.
+#
+# Using the tool (the code is inside the image: rebuild with `docker compose build --pull convert`
+# after updating it):
+#   docker compose run --rm convert -i /data/feed.zip -o /data/out.osc
+#   docker compose --profile tools run --rm osmium extract ...    # OSM extracts (osmium-tool)
+#   docker compose --profile tools run --rm pfaedle -x /data/region.osm.pbf /data/feed.zip
+#
+# Working on the code (profile dev, Dockerfile.dev): the folders gtfstoosm/ and tests/ of the
+# host are mounted in the container, so a change is seen at once, with no rebuild.
+# `up` starts it and the tests run again at each change; the other commands go in it:
+#   docker compose --profile dev up
+#   docker compose exec dev gtfstoosm -i /data/feed.zip -o /data/out.osc
+#   docker compose exec dev pytest
+#   docker compose exec dev ruff check .
+# (without `up`, the same work in a one-shot container: docker compose --profile dev run --rm dev pytest)
+#
+# Put GTFS feeds and OSM extracts in ./data (git-ignored).
+
+services:
+  convert:
+    build:
+      context: .
+    image: gtfstoosm:latest
+    volumes:
+      - ./data:/data
+
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: gtfstoosm:dev
+    volumes:
+      - ./gtfstoosm:/app/gtfstoosm
+      - ./tests:/app/tests
+      - ./data:/data
+    profiles: ["dev"]
+
+  osmium:
+    build:
+      context: .
+    image: gtfstoosm:latest
+    entrypoint: ["osmium"]
+    volumes:
+      - ./data:/data
+    profiles: ["tools"]
+
+  # Official image of https://github.com/ad-freiburg/pfaedle (GPL-3.0). It writes
+  # a copy of the GTFS feed with generated shapes to ./data/gtfs-out.
+  pfaedle:
+    image: ghcr.io/ad-freiburg/pfaedle:latest
+    working_dir: /data
+    volumes:
+      - ./data:/data
+    profiles: ["tools"]
