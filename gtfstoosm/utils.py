@@ -92,13 +92,16 @@ def calculate_direction(
 split_compile = re.compile(r"([/\-–—|\\~])")
 
 
-def format_name(name: str) -> str:
+def format_name(name: str | None) -> str:
     """
     Format a name for use in OSM.
 
     Args:
-        name: The input name
+        name: The input name (GTFS optional fields may be empty or missing)
     """
+    if not name:
+        return ""
+
     # Remove leading and trailing whitespace
     name = name.strip(" ,;").replace("  ", " ").replace("_", " ")
 
@@ -126,6 +129,24 @@ def format_name(name: str) -> str:
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
+
+
+def format_colour(colour: str | None) -> str | None:
+    """
+    Format a GTFS route_color as an OSM colour tag value.
+
+    Args:
+        colour: Hex color without leading '#', possibly empty or missing
+
+    Returns:
+        "#RRGGBB" style string, or None if the input is not a valid hex color
+    """
+    if not colour:
+        return None
+    colour = colour.strip().lstrip("#")
+    if len(colour) not in (3, 6) or not re.fullmatch(r"[0-9A-Fa-f]+", colour):
+        return None
+    return "#" + colour
 
 
 def parse_tag_string(tag_string: str) -> dict[str, str]:

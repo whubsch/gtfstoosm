@@ -311,11 +311,11 @@ class TestGetStopLocations:
         builder = OSMRelationBuilder()
         stops = loaded_gtfs_data["stops"]
 
-        stop_ids = [1]
+        stop_ids = ["1"]
         locations = builder._get_stop_locations(stop_ids, stops)
 
         assert locations.height == 1
-        assert locations["stop_id"][0] == 1
+        assert locations["stop_id"][0] == "1"
         assert locations["lat"][0] == 40.7128
         assert locations["lon"][0] == -74.0060
         assert locations["name"][0] == "Stop 1"
@@ -325,11 +325,11 @@ class TestGetStopLocations:
         builder = OSMRelationBuilder()
         stops = loaded_gtfs_data["stops"]
 
-        stop_ids = [1, 2, 3]
+        stop_ids = ["1", "2", "3"]
         locations = builder._get_stop_locations(stop_ids, stops)
 
         assert locations.height == 3
-        assert list(locations["stop_id"]) == [1, 2, 3]
+        assert list(locations["stop_id"]) == ["1", "2", "3"]
         assert all(col in locations.columns for col in ["lat", "lon", "name"])
 
     def test_get_stop_locations_preserves_order(self, loaded_gtfs_data):
@@ -338,17 +338,17 @@ class TestGetStopLocations:
         stops = loaded_gtfs_data["stops"]
 
         # Request in reverse order
-        stop_ids = [3, 1, 2]
+        stop_ids = ["3", "1", "2"]
         locations = builder._get_stop_locations(stop_ids, stops)
 
-        assert list(locations["stop_id"]) == [3, 1, 2]
+        assert list(locations["stop_id"]) == ["3", "1", "2"]
 
     def test_get_stop_locations_with_duplicates(self, loaded_gtfs_data):
         """Test getting locations with duplicate stop IDs."""
         builder = OSMRelationBuilder()
         stops = loaded_gtfs_data["stops"]
 
-        stop_ids = [1, 2, 1]
+        stop_ids = ["1", "2", "1"]
         locations = builder._get_stop_locations(stop_ids, stops)
 
         # Should include duplicates if they appear in the input
