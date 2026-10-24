@@ -45,6 +45,14 @@ python -m gtfstoosm.cli --input /path/to/gtfs.zip --output output.osc
 
 - `--add-route-direction`: Add route direction information to the output (default: False)
   - Adds directional tags to help distinguish route variants
+- `--ptv2-names`: Name routes like `bus 1: Origin => Destination` (the OSM public transport v2 scheme) instead of `Route 1 Long Name` (default: False)
+  - Origin and destination are the names of the first and last stop
+
+#### Link With the Feed
+
+- `--feed-id`: Identifier of the feed, for example `FR-IDF-IDFM`. Adds `gtfs:feed`, `gtfs:route_id` and `gtfs:trip_id:sample` to the route and route_master relations, the tags [PTNA](https://community.openstreetmap.org/t/ptna-new-feature-gtfs-osm-comparison/109659) uses to compare a route with its GTFS trip
+
+Route relations also get `from` and `to` tags (first and last stop names) whether or not these options are used.
 
 #### Logging
 

@@ -127,6 +127,21 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--feed-id",
+        dest="feed_id",
+        type=str,
+        help="Identifier of this feed (e.g. 'FR-IDF-IDFM'). Adds gtfs:feed, gtfs:route_id and gtfs:trip_id:sample tags to route relations so they can be compared with the feed later",
+    )
+
+    parser.add_argument(
+        "--ptv2-names",
+        dest="ptv2_names",
+        action="store_true",
+        default=False,
+        help="Name routes like 'bus 1: Origin => Destination' (OSM public transport v2 scheme)",
+    )
+
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -190,6 +205,8 @@ def main(args: list[str] | None = None) -> int:
             "stop_search_radius": parsed_args.stop_search_radius,
             "add_route_direction": parsed_args.add_route_direction,
             "route_ref_pattern": parsed_args.route_ref_pattern,
+            "feed_id": parsed_args.feed_id,
+            "ptv2_names": parsed_args.ptv2_names,
             "relation_tags": parse_tag_string(parsed_args.relation_tags)
             if parsed_args.relation_tags
             else None,

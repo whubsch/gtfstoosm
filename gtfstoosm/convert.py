@@ -18,6 +18,7 @@ from gtfstoosm.utils import (
     Trip,
     calculate_direction,
     deduplicate_trips,
+    format_colour,
     format_name,
     string_to_unique_int,
 )
@@ -39,6 +40,8 @@ class OSMRelationBuilder:
         route_direction: bool = False,
         route_ref_pattern: str | None = None,
         relation_tags: dict[str, str] | None = None,
+        feed_id: str | None = None,
+        ptv2_names: bool = False,
     ):
         """
         Initialize the OSM relation builder.
@@ -55,6 +58,9 @@ class OSMRelationBuilder:
         self.route_direction: bool = route_direction
         self.route_ref_pattern: str | None = route_ref_pattern
         self.relation_tags: dict[str, str] | None = relation_tags
+        self.feed_id: str | None = feed_id
+        self.ptv2_names: bool = ptv2_names
+        self._new_stop_node_ids: dict[str, int] = {}
 
     def __str__(self) -> str:
         # Exclude None values and internal collections
@@ -93,20 +99,29 @@ class OSMRelationBuilder:
         """
         logger.info("Creating route_master relations")
 
+        # Route variants carry route_short_name as ref, which often differs from route_id
         made_routes = {variant.tags["ref"] for variant in self.relations}
         unique_routes = gtfs_data["routes"].filter(
-            pl.col("route_id").cast(pl.Utf8).is_in(made_routes)
+            pl.col("route_short_name").cast(pl.Utf8).is_in(made_routes)
         )
 
         for unique_route in unique_routes.iter_rows(named=True):
+            short_name = unique_route.get("route_short_name") or ""
+            long_name = unique_route.get("route_long_name") or ""
             route_master_tags = {
                 "type": "route_master",
                 "route_master": "bus",
-                "ref": unique_route["route_id"],
-                "name": f"Route {unique_route['route_short_name']} {unique_route['route_long_name']}".strip(),
+                "ref": short_name,
+                "name": " ".join(
+                    part for part in ("Route", short_name, long_name) if part
+                ),
             }
-            if "route_color" in unique_route:
-                route_master_tags["route_color"] = "#" + unique_route["route_color"]
+            colour = format_colour(unique_route.get("route_color"))
+            if colour:
+                route_master_tags["colour"] = colour
+            if self.feed_id:
+                route_master_tags["gtfs:feed"] = self.feed_id
+                route_master_tags["gtfs:route_id"] = str(unique_route["route_id"])
 
             if self.relation_tags:
                 route_master_tags.update(self.relation_tags)
@@ -173,7 +188,7 @@ class OSMRelationBuilder:
             try:
                 route_info = routes_to_process.filter(
                     pl.col("route_id").cast(pl.Utf8) == route_ref
-                ).row(0)
+                ).row(0, named=True)
                 logger.info(f"Processing route {route_ref}")
             except pl.exceptions.OutOfBoundsError:
                 continue
@@ -214,15 +229,37 @@ class OSMRelationBuilder:
                     last_stop = stop_locations.tail(1).select(["lat", "lon"]).row(0)
                     direction = calculate_direction(first_stop, last_stop)
 
+                # Optional GTFS columns may be absent from routes.txt or empty
+                short_name = route_info.get("route_short_name") or ""
+                long_name = format_name(route_info.get("route_long_name"))
+                osm_route_type = self._get_osm_route_type(route_info["route_type"])
+                from_name, to_name = self._get_terminus_names(stop_locations)
+                if self.ptv2_names and from_name and to_name:
+                    name = f"{osm_route_type} {short_name}: {from_name} => {to_name}"
+                else:
+                    name = " ".join(
+                        part
+                        for part in ("Route", short_name, long_name, direction)
+                        if part
+                    )
                 route_tags = {
                     "type": "route",
                     "public_transport:version": "2",
-                    "route": self._get_osm_route_type(route_info[5]),
-                    "ref": route_info[2],
-                    "name": f"Route {route_info[2]} {format_name(route_info[3])} {direction}".strip(),
+                    "route": osm_route_type,
+                    "ref": short_name,
+                    "name": name,
                 }
-                if route_info[7] and len(route_info[7].strip("#")) in (3, 6):
-                    route_tags["colour"] = "#" + route_info[7].strip("#")
+                if from_name:
+                    route_tags["from"] = from_name
+                if to_name:
+                    route_tags["to"] = to_name
+                if self.feed_id:
+                    route_tags["gtfs:feed"] = self.feed_id
+                    route_tags["gtfs:route_id"] = route_ref
+                    route_tags["gtfs:trip_id:sample"] = trip_sequence.trip_id
+                colour = format_colour(route_info.get("route_color"))
+                if colour:
+                    route_tags["colour"] = colour
 
                 if self.relation_tags:
                     route_tags.update(self.relation_tags)
@@ -245,6 +282,14 @@ class OSMRelationBuilder:
                     relation.add_member(osm_type="way", ref=way_id)
 
                 self.relations.append(relation)
+
+    @staticmethod
+    def _get_terminus_names(stop_locations: pl.DataFrame) -> tuple[str, str]:
+        """Return the names of the first and last stop of a trip ("" if unknown)."""
+        if stop_locations.is_empty():
+            return "", ""
+        names = stop_locations["name"].to_list()
+        return (names[0] or "").strip(), (names[-1] or "").strip()
 
     def _get_stop_objects(
         self, stops: pl.DataFrame, add_missing_stops: bool, max_distance: float = 5
@@ -352,7 +397,7 @@ class OSMRelationBuilder:
                             if add_missing_stops:
                                 # Add the stop to the output
                                 new_stop = OSMNode(
-                                    id=-1 * stop_row["stop_id"],
+                                    id=self._new_stop_node_id(stop_row["stop_id"]),
                                     lat=stop_lat,
                                     lon=stop_lon,
                                     tags={
@@ -455,7 +500,7 @@ class OSMRelationBuilder:
         return c * r
 
     def _get_stop_locations(
-        self, stop_ids: list[int], stops: pl.DataFrame
+        self, stop_ids: list[str], stops: pl.DataFrame
     ) -> pl.DataFrame:
         """
         Get location information for a list of stop IDs.
@@ -629,6 +674,16 @@ class OSMRelationBuilder:
 
         return route_type_map.get(route_type, "bus")
 
+    def _new_stop_node_id(self, stop_id: str) -> int:
+        """Return the negative OSM node id used for a GTFS stop that is not in OSM.
+
+        GTFS stop IDs are text, so they cannot be negated: each distinct stop gets
+        the next free negative number, and the same stop always gets the same one.
+        """
+        if stop_id not in self._new_stop_node_ids:
+            self._new_stop_node_ids[stop_id] = -(len(self._new_stop_node_ids) + 1)
+        return self._new_stop_node_ids[stop_id]
+
     def is_stop_duplicate(self, new_stop: OSMNode) -> bool:
         """Check if a stop is already in self.new_stops."""
         for existing_stop in self.new_stops:
@@ -692,6 +747,9 @@ def convert_gtfs_to_osm(
             - add_route_direction: Whether to add route direction to the output (default: False)
             - route_ref_pattern: Regex pattern to filter routes by (default: None)
             - relation_tags: Dict of tags to add to the route and route_master relations (default: None)
+            - feed_id: Identifier of the feed; when set, route relations get gtfs:feed,
+              gtfs:route_id and gtfs:trip_id:sample tags (default: None)
+            - ptv2_names: Name routes "bus 1: A => B" instead of "Route 1 Long Name" (default: False)
 
     Returns:
         True if conversion was successful
@@ -723,6 +781,8 @@ def convert_gtfs_to_osm(
             route_direction=options.get("route_direction", False),
             route_ref_pattern=options.get("route_ref_pattern"),
             relation_tags=options.get("relation_tags"),
+            feed_id=options.get("feed_id"),
+            ptv2_names=options.get("ptv2_names", False),
         )
 
         logger.debug(f"OSMRelationBuilder options: {builder}")

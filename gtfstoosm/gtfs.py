@@ -14,6 +14,23 @@ from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
+# Columns parsed as numbers; every other column (notably all IDs) stays text
+NUMERIC_COLUMNS: dict[str, type[pl.DataType]] = {
+    "stop_lat": pl.Float64,
+    "stop_lon": pl.Float64,
+    "shape_pt_lat": pl.Float64,
+    "shape_pt_lon": pl.Float64,
+    "shape_dist_traveled": pl.Float64,
+    "stop_sequence": pl.Int64,
+    "shape_pt_sequence": pl.Int64,
+    "route_type": pl.Int64,
+    "direction_id": pl.Int64,
+    "location_type": pl.Int64,
+}
+
+# Optional routes.txt columns the converter reads, added as nulls when absent
+OPTIONAL_ROUTE_COLUMNS = ["route_short_name", "route_long_name", "route_color"]
+
 
 class GTFSValidationError(Exception):
     """Exception raised when GTFS feed validation fails."""
@@ -328,10 +345,22 @@ class GTFSFeed(BaseModel):
                     try:
                         logger.debug(f"Loading {file}")
                         with zip_ref.open(file) as file_obj:
-                            # Read the CSV data into a polars DataFrame
+                            # Read everything as text: inferring types turns IDs like
+                            # "0123" into 123 and colors like "000000" into 0
                             df = pl.read_csv(
-                                BytesIO(file_obj.read()), infer_schema_length=None
+                                BytesIO(file_obj.read()), infer_schema=False
                             )
+                            df = df.with_columns(
+                                pl.col(col).str.strip_chars().cast(dtype, strict=False)
+                                for col, dtype in NUMERIC_COLUMNS.items()
+                                if col in df.columns
+                            )
+                            if table_name == "routes":
+                                df = df.with_columns(
+                                    pl.lit(None, dtype=pl.Utf8).alias(col)
+                                    for col in OPTIONAL_ROUTE_COLUMNS
+                                    if col not in df.columns
+                                )
 
                             logger.info(f"Loaded {df.height:,} records from {file}")
                             self.tables[table_name] = df
